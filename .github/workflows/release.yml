@@ -4,6 +4,7 @@ on:
   release:
     types: [created]
 
+
 jobs:
   build:
     name: Build (${{ matrix.goarch }})
@@ -13,9 +14,9 @@ jobs:
         goarch: [amd64, arm64, 386]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6.0.2
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6.3.0
         with:
           go-version-file: go.mod
           cache: true
