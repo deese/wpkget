@@ -5,7 +5,7 @@ A minimal Windows package manager that pulls compiled binaries directly from Git
 ## Installation
 
 ```
-go install github.com/YOUR_USERNAME/wpkget@latest
+go install github.com/deese/wpkget@latest
 ```
 
 Or download the latest release binary and place it in a directory on your `PATH`.
