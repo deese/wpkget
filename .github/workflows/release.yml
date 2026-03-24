@@ -1,0 +1,45 @@
+name: Release
+
+on:
+  release:
+    types: [created]
+
+jobs:
+  build:
+    name: Build (${{ matrix.goarch }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goarch: [amd64, arm64, 386]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build
+        env:
+          GOOS: windows
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          go build -ldflags="-s -w" \
+            -o wpkget_windows_${{ matrix.goarch }}.exe \
+            ./src/cmd/wpkget/
+
+      - name: Package zip
+        run: |
+          zip wpkget_windows_${{ matrix.goarch }}.zip \
+            wpkget_windows_${{ matrix.goarch }}.exe
+
+      - name: Upload assets to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload ${{ github.event.release.tag_name }} \
+            wpkget_windows_${{ matrix.goarch }}.exe \
+            wpkget_windows_${{ matrix.goarch }}.zip \
+            --clobber

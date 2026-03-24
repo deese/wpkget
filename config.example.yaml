@@ -1,0 +1,12 @@
+# wpkget configuration
+# Default location: %APPDATA%\wpkget\config.yaml
+# Override with: --config <path> or WPKGET_CONFIG env var
+
+# Directory where binaries are installed.
+# Defaults to %APPDATA%\wpkget\bin if not set.
+bin_dir: "C:\\tools\\bin"
+
+# zipdown service — leave empty to disable (future feature).
+# When set, bare .exe assets are wrapped through the service before install.
+zipdown_url: ""
+zipdown_token: ""

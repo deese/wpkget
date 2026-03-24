@@ -1,0 +1,16 @@
+# wpkget package list
+# Managed automatically by wpkget. Location: %APPDATA%\wpkget\packages.yaml
+# You can edit this file manually — wpkget will respect binary_name on next update.
+
+packages:
+  - repo: junegunn/fzf
+    version: "0.57.0"
+    # binary_name omitted → installed as fzf.exe
+
+  - repo: cli/cli
+    version: "2.68.1"
+    binary_name: gh   # installed as gh.exe instead of cli.exe
+
+  - repo: BurntSushi/ripgrep
+    version: "14.1.1"
+    binary_name: rg   # installed as rg.exe
