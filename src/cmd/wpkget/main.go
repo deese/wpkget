@@ -74,7 +74,9 @@ func main() {
 	case "update":
 		os.Exit(handleUpdate(cfg, pkgList, zd, dryRun, verbose))
 	case "list":
-		os.Exit(handleList(pkgList))
+		os.Exit(handleList(args, pkgList, verbose))
+	case "check":
+		os.Exit(handleCheck(pkgList, verbose))
 	case "remove":
 		os.Exit(handleRemove(args, pkgList))
 	case "url":
@@ -187,19 +189,73 @@ func handleUpdate(cfg *config.Config, pkgList *packages.List, zd *zipdown.Client
 }
 
 // handleList prints all tracked packages.
-func handleList(pkgList *packages.List) int {
+// Accepts an optional -v flag to include the resolved download URL.
+func handleList(args []string, pkgList *packages.List, verbose bool) int {
+	showURL := false
+	for _, a := range args {
+		if a == "-v" {
+			showURL = true
+		}
+	}
+
 	if len(pkgList.Packages) == 0 {
 		fmt.Println("no packages tracked")
 		return exitOK
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "REPO\tVERSION\tBINARY NAME")
+	if showURL {
+		fmt.Fprintln(w, "REPO\tVERSION\tBINARY NAME\tURL")
+	} else {
+		fmt.Fprintln(w, "REPO\tVERSION\tBINARY NAME")
+	}
+
+	code := exitOK
 	for _, e := range pkgList.Packages {
-		fmt.Fprintf(w, "%s\t%s\t%s\n", e.Repo, e.Version, e.BinaryName)
+		if !showURL {
+			fmt.Fprintf(w, "%s\t%s\t%s\n", e.Repo, e.Version, e.BinaryName)
+			continue
+		}
+		_, url, err := install.ResolveURL(e.Repo, verbose)
+		if err != nil {
+			log.Printf("list %s: resolve url: %v", e.Repo, err)
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", e.Repo, e.Version, e.BinaryName, "(error)")
+			code = mapError(err)
+			continue
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", e.Repo, e.Version, e.BinaryName, url)
 	}
 	w.Flush()
-	return exitOK
+	return code
+}
+
+// handleCheck queries the latest release for each tracked package without downloading.
+func handleCheck(pkgList *packages.List, verbose bool) int {
+	if len(pkgList.Packages) == 0 {
+		fmt.Println("no packages tracked")
+		return exitOK
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "REPO\tINSTALLED\tLATEST\tSTATUS")
+
+	code := exitOK
+	for _, e := range pkgList.Packages {
+		latest, _, err := install.ResolveURL(e.Repo, verbose)
+		if err != nil {
+			log.Printf("check %s: %v", e.Repo, err)
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", e.Repo, e.Version, "(error)", "error")
+			code = mapError(err)
+			continue
+		}
+		status := "up to date"
+		if latest != e.Version {
+			status = "update available"
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", e.Repo, e.Version, latest, status)
+	}
+	w.Flush()
+	return code
 }
 
 // handleRemove removes a repo from the tracking list.
@@ -307,7 +363,9 @@ Commands:
   install <user/repo> [...]   install latest Windows release from GitHub
            [--name <binary>]  rename the installed binary (single repo only)
   update                      check all tracked packages for new releases
-  list                        list tracked packages and their versions
+  list    [-v]                list tracked packages and their versions
+                              -v: include resolved download URL
+  check                       show latest available version for each tracked package
   remove  <user/repo> [...]   remove packages from tracking (binary not deleted)
   url     <user/repo> [...]   print the download URL without installing
 
