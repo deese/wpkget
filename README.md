@@ -18,8 +18,6 @@ Override with the `--config` flag or the `WPKGET_CONFIG` environment variable.
 ```yaml
 # config.yaml
 bin_dir: "C:\\tools\\bin"       # destination folder for installed binaries
-zipdown_url: ""                 # zipdown service base URL (future)
-zipdown_token: ""               # zipdown auth token (future)
 ```
 
 ## Usage
@@ -29,7 +27,10 @@ zipdown_token: ""               # zipdown auth token (future)
 Download and install the latest Windows release from a GitHub repository.
 
 ```
-wpkget install <user/repo>
+wpkget install <user/repo> [...]
+         [--name <binary>]    rename the installed binary (single repo only)
+         [--match <pattern>]  glob to select the release asset
+         [--all]              copy all archive contents to bin-dir
 ```
 
 Example:
@@ -37,6 +38,8 @@ Example:
 ```
 wpkget install junegunn/fzf
 wpkget install cli/cli
+wpkget install BurntSushi/ripgrep --match "*windows-msvc*.zip"
+wpkget install neovim/neovim --name nvim
 ```
 
 wpkget selects the release asset whose name contains `windows` and whose extension is `.zip`, `.tar.gz`, `.gz`, or `.exe`.
@@ -60,13 +63,22 @@ wpkget update
 
 If a newer version is found the full install process runs automatically (download, decompress, move, delete).
 
+### Check for available updates (without installing)
+
+Show the latest available version for each tracked package without downloading anything.
+
+```
+wpkget check
+```
+
 ### List tracked packages
 
 ```
-wpkget list
+wpkget list [-v]
 ```
 
 Output shows each tracked package and its currently installed version.
+Pass `-v` to also show the resolved download URL.
 
 ### Remove a package from tracking
 
@@ -98,6 +110,7 @@ The file is updated automatically after each successful install or update.
 | `--bin-dir <path>` | Override destination directory for this run |
 | `--dry-run` | Resolve and print what would be done without doing it |
 | `--verbose` | Enable verbose output |
+| `--debug` | Print step-by-step diagnostic output |
 
 ## Exit codes
 

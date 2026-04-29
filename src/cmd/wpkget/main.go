@@ -35,12 +35,14 @@ func main() {
 		binDir     string
 		dryRun     bool
 		verbose    bool
+		debug      bool
 	)
 
 	flag.StringVar(&configPath, "config", "", "path to config file (overrides WPKGET_CONFIG and default)")
 	flag.StringVar(&binDir, "bin-dir", "", "destination directory (overrides config)")
 	flag.BoolVar(&dryRun, "dry-run", false, "print what would be done without doing it")
 	flag.BoolVar(&verbose, "verbose", false, "enable verbose output")
+	flag.BoolVar(&debug, "debug", false, "print step-by-step diagnostic output")
 	flag.Usage = usage
 	flag.Parse()
 
@@ -70,9 +72,9 @@ func main() {
 
 	switch subcmd {
 	case "install":
-		os.Exit(handleInstall(args, cfg, pkgList, zd, dryRun, verbose))
+		os.Exit(handleInstall(args, cfg, pkgList, zd, dryRun, verbose, debug))
 	case "update":
-		os.Exit(handleUpdate(cfg, pkgList, zd, dryRun, verbose))
+		os.Exit(handleUpdate(cfg, pkgList, zd, dryRun, verbose, debug))
 	case "list":
 		os.Exit(handleList(args, pkgList, verbose))
 	case "check":
@@ -89,11 +91,12 @@ func main() {
 }
 
 // handleInstall downloads and installs the latest release for each given repo.
-// Accepts an optional --name flag to rename the installed binary.
-// --name is only allowed when a single repo is specified.
-func handleInstall(args []string, cfg *config.Config, pkgList *packages.List, zd *zipdown.Client, dryRun, verbose bool) int {
-	// Parse manually so --name can appear before or after the repo argument.
-	repos, binaryName, err := parseInstallArgs(args)
+// Accepts --name to rename the installed binary (single repo only),
+// --match as a glob pattern to select the release asset, and
+// --all to copy all archive contents instead of a single .exe.
+func handleInstall(args []string, cfg *config.Config, pkgList *packages.List, zd *zipdown.Client, dryRun, verbose, debug bool) int {
+	// Parse manually so flags can appear before or after the repo argument.
+	repos, binaryName, match, all, err := parseInstallArgs(args)
 	if err != nil {
 		log.Printf("install: %v", err)
 		return exitGeneral
@@ -120,8 +123,11 @@ func handleInstall(args []string, cfg *config.Config, pkgList *packages.List, zd
 			Repo:       repo,
 			BinDir:     cfg.BinDir,
 			BinaryName: binaryName,
+			Match:      match,
+			All:        all,
 			DryRun:     dryRun,
 			Verbose:    verbose,
+			Debug:      debug,
 			Zipdown:    zd,
 		})
 		if err != nil {
@@ -131,7 +137,7 @@ func handleInstall(args []string, cfg *config.Config, pkgList *packages.List, zd
 		}
 
 		if !dryRun {
-			pkgList.Upsert(repo, result.Version, binaryName)
+			pkgList.Upsert(repo, result.Version, binaryName, match, all)
 			if err := pkgList.Save(); err != nil {
 				log.Printf("install %s: save package list: %v", repo, err)
 				code = exitGeneral
@@ -144,7 +150,7 @@ func handleInstall(args []string, cfg *config.Config, pkgList *packages.List, zd
 }
 
 // handleUpdate checks all tracked packages for new releases and installs them.
-func handleUpdate(cfg *config.Config, pkgList *packages.List, zd *zipdown.Client, dryRun, verbose bool) int {
+func handleUpdate(cfg *config.Config, pkgList *packages.List, zd *zipdown.Client, dryRun, verbose, debug bool) int {
 	if len(pkgList.Packages) == 0 {
 		fmt.Println("no packages tracked")
 		return exitOK
@@ -156,8 +162,11 @@ func handleUpdate(cfg *config.Config, pkgList *packages.List, zd *zipdown.Client
 			Repo:       entry.Repo,
 			BinDir:     cfg.BinDir,
 			BinaryName: entry.BinaryName,
+			Match:      entry.Match,
+			All:        entry.All,
 			DryRun:     dryRun,
 			Verbose:    verbose,
+			Debug:      debug,
 			Zipdown:    zd,
 		})
 		if err != nil {
@@ -176,7 +185,7 @@ func handleUpdate(cfg *config.Config, pkgList *packages.List, zd *zipdown.Client
 		}
 
 		fmt.Printf("updated %s %s → %s (%s)\n", entry.Repo, entry.Version, result.Version, result.BinaryPath)
-		pkgList.Upsert(entry.Repo, result.Version, entry.BinaryName)
+		pkgList.Upsert(entry.Repo, result.Version, entry.BinaryName, entry.Match, entry.All)
 	}
 
 	if !dryRun {
@@ -216,7 +225,7 @@ func handleList(args []string, pkgList *packages.List, verbose bool) int {
 			fmt.Fprintf(w, "%s\t%s\t%s\n", e.Repo, e.Version, e.BinaryName)
 			continue
 		}
-		_, url, err := install.ResolveURL(e.Repo, verbose)
+		_, url, err := install.ResolveURL(e.Repo, e.Match, verbose)
 		if err != nil {
 			log.Printf("list %s: resolve url: %v", e.Repo, err)
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", e.Repo, e.Version, e.BinaryName, "(error)")
@@ -241,7 +250,7 @@ func handleCheck(pkgList *packages.List, verbose bool) int {
 
 	code := exitOK
 	for _, e := range pkgList.Packages {
-		latest, _, err := install.ResolveURL(e.Repo, verbose)
+		latest, _, err := install.ResolveURL(e.Repo, e.Match, verbose)
 		if err != nil {
 			log.Printf("check %s: %v", e.Repo, err)
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", e.Repo, e.Version, "(error)", "error")
@@ -297,7 +306,7 @@ func handleURL(args []string, verbose bool) int {
 			continue
 		}
 
-		version, url, err := install.ResolveURL(repo, verbose)
+		version, url, err := install.ResolveURL(repo, "", verbose)
 		if err != nil {
 			log.Printf("url %s: %v", repo, err)
 			code = mapError(err)
@@ -308,14 +317,14 @@ func handleURL(args []string, verbose bool) int {
 	return code
 }
 
-// parseInstallArgs separates repos from the --name flag regardless of order.
-func parseInstallArgs(args []string) (repos []string, binaryName string, err error) {
+// parseInstallArgs separates repos from the --name, --match, and --all flags regardless of order.
+func parseInstallArgs(args []string) (repos []string, binaryName string, match string, all bool, err error) {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		switch {
 		case arg == "--name" || arg == "-name":
 			if i+1 >= len(args) {
-				return nil, "", fmt.Errorf("--name requires a value")
+				return nil, "", "", false, fmt.Errorf("--name requires a value")
 			}
 			binaryName = args[i+1]
 			i++
@@ -323,11 +332,23 @@ func parseInstallArgs(args []string) (repos []string, binaryName string, err err
 			binaryName = strings.TrimPrefix(arg, "--name=")
 		case strings.HasPrefix(arg, "-name="):
 			binaryName = strings.TrimPrefix(arg, "-name=")
+		case arg == "--match" || arg == "-match":
+			if i+1 >= len(args) {
+				return nil, "", "", false, fmt.Errorf("--match requires a value")
+			}
+			match = args[i+1]
+			i++
+		case strings.HasPrefix(arg, "--match="):
+			match = strings.TrimPrefix(arg, "--match=")
+		case strings.HasPrefix(arg, "-match="):
+			match = strings.TrimPrefix(arg, "-match=")
+		case arg == "--all" || arg == "-all":
+			all = true
 		default:
 			repos = append(repos, arg)
 		}
 	}
-	return repos, binaryName, nil
+	return repos, binaryName, match, all, nil
 }
 
 // validateRepo checks that repo is in the "owner/name" form.
@@ -360,20 +381,24 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `Usage: wpkget [flags] <command> [args]
 
 Commands:
-  install <user/repo> [...]   install latest Windows release from GitHub
-           [--name <binary>]  rename the installed binary (single repo only)
-  update                      check all tracked packages for new releases
-  list    [-v]                list tracked packages and their versions
-                              -v: include resolved download URL
-  check                       show latest available version for each tracked package
-  remove  <user/repo> [...]   remove packages from tracking (binary not deleted)
-  url     <user/repo> [...]   print the download URL without installing
+  install <user/repo> [...]    install latest Windows release from GitHub
+           [--name <binary>]   rename the installed binary (single repo only)
+           [--match <pattern>] glob pattern to select the release asset
+                               (e.g. --match "*windows-amd64*.zip")
+           [--all]             copy all archive contents (files + folders) to bin-dir
+  update                       check all tracked packages for new releases
+  list    [-v]                 list tracked packages and their versions
+                               -v: include resolved download URL
+  check                        show latest available version for each tracked package
+  remove  <user/repo> [...]    remove packages from tracking (binary not deleted)
+  url     <user/repo> [...]    print the download URL without installing
 
 Flags:
   --config  <path>   config file (default: %%APPDATA%%\wpkget\config.yaml)
   --bin-dir <path>   destination directory (overrides config)
   --dry-run          show what would be done without doing it
   --verbose          enable verbose output
+  --debug            print step-by-step diagnostic output
 
 Exit codes:
   0  success

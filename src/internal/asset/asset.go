@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"path"
 	"strings"
 
 	"github.com/deese/wpkget/src/internal/github"
@@ -16,25 +17,37 @@ var ErrNoAsset = errors.New("no suitable Windows asset found")
 var allowedExts = []string{".zip", ".tar.gz", ".gz", ".exe"}
 
 // Select picks the best Windows asset from a release's asset list.
-// It applies heuristics in order:
+// When match is non-empty it is used as a glob pattern (see path.Match) to
+// select candidates, skipping the windows/arch heuristics.
+// Without match, heuristics are applied in order:
 //  1. Filter to allowed extensions only.
 //  2. Prefer assets containing "windows" in the name.
 //  3. Among those prefer amd64/x86_64 over 386/i386.
 //
 // If multiple candidates remain after all filters, the first is used and a
 // warning is printed. If none remain, ErrNoAsset is returned.
-func Select(assets []github.Asset, repoName string, verbose bool) (*github.Asset, error) {
+func Select(assets []github.Asset, repoName string, match string, verbose bool) (*github.Asset, error) {
 	candidates := filterByExt(assets)
 	if len(candidates) == 0 {
 		return nil, fmt.Errorf("%w in %d total assets", ErrNoAsset, len(assets))
 	}
 
-	if windows := filterByKeyword(candidates, "windows"); len(windows) > 0 {
-		candidates = windows
-	}
-
-	if arch := filterByArch(candidates); len(arch) > 0 {
-		candidates = arch
+	if match != "" {
+		filtered, err := filterByGlob(candidates, match)
+		if err != nil {
+			return nil, fmt.Errorf("invalid --match pattern %q: %w", match, err)
+		}
+		if len(filtered) == 0 {
+			return nil, fmt.Errorf("%w: no asset matched pattern %q", ErrNoAsset, match)
+		}
+		candidates = filtered
+	} else {
+		if windows := filterByKeyword(candidates, "windows"); len(windows) > 0 {
+			candidates = windows
+		}
+		if arch := filterByArch(candidates); len(arch) > 0 {
+			candidates = arch
+		}
 	}
 
 	if len(candidates) > 1 && verbose {
@@ -77,6 +90,20 @@ func filterByKeyword(assets []github.Asset, keyword string) []github.Asset {
 		}
 	}
 	return out
+}
+
+func filterByGlob(assets []github.Asset, pattern string) ([]github.Asset, error) {
+	var out []github.Asset
+	for _, a := range assets {
+		matched, err := path.Match(pattern, a.Name)
+		if err != nil {
+			return nil, err
+		}
+		if matched {
+			out = append(out, a)
+		}
+	}
+	return out, nil
 }
 
 func filterByArch(assets []github.Asset) []github.Asset {

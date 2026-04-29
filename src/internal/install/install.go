@@ -23,9 +23,12 @@ import (
 type Options struct {
 	Repo       string
 	BinDir     string
-	BinaryName string         // optional: rename the installed .exe to this name (without extension)
+	BinaryName string          // optional: rename the installed .exe to this name (without extension)
+	Match      string          // optional: glob pattern to select the release asset (e.g. "*windows-amd64*.zip")
+	All        bool            // when true, copy all archive contents to BinDir instead of extracting a single .exe
 	DryRun     bool
 	Verbose    bool
+	Debug      bool            // enable step-by-step diagnostic output
 	Zipdown    *zipdown.Client // nil means zipdown is disabled
 }
 
@@ -46,7 +49,7 @@ func Run(opts Options) (*Result, error) {
 	}
 
 	repoName := repoBaseName(opts.Repo)
-	chosen, err := asset.Select(release.Assets, repoName, opts.Verbose)
+	chosen, err := asset.Select(release.Assets, repoName, opts.Match, opts.Verbose)
 	if err != nil {
 		return nil, err
 	}
@@ -57,7 +60,11 @@ func Run(opts Options) (*Result, error) {
 		fmt.Printf("dry-run: would install %s %s\n", opts.Repo, release.TagName)
 		fmt.Printf("dry-run: asset      %s\n", chosen.Name)
 		fmt.Printf("dry-run: url        %s\n", chosen.BrowserDownloadURL)
-		fmt.Printf("dry-run: dest       %s\n", filepath.Join(opts.BinDir, destName))
+		if opts.All {
+			fmt.Printf("dry-run: dest (all) %s\n", opts.BinDir)
+		} else {
+			fmt.Printf("dry-run: dest       %s\n", filepath.Join(opts.BinDir, destName))
+		}
 		return &Result{Version: release.TagName}, nil
 	}
 
@@ -78,15 +85,26 @@ func Run(opts Options) (*Result, error) {
 		return nil, err
 	}
 
-	// Locate the binary inside the archive (or use directly for bare .exe).
-	binaryInTmp, err := extractBinary(archivePath, tmpDir, repoName)
-	if err != nil {
-		return nil, err
-	}
-
 	// Ensure the destination directory exists.
 	if err := os.MkdirAll(opts.BinDir, 0o755); err != nil {
 		return nil, fmt.Errorf("install: create bin dir: %w", err)
+	}
+
+	if opts.All {
+		// Copy all archive contents to BinDir.
+		if err := extractAndCopyAll(archivePath, opts.BinDir, tmpDir, opts.Debug); err != nil {
+			return nil, err
+		}
+		if opts.Verbose {
+			log.Printf("installed all files from %s %s → %s", opts.Repo, release.TagName, opts.BinDir)
+		}
+		return &Result{Version: release.TagName, BinaryPath: opts.BinDir}, nil
+	}
+
+	// Locate the single binary inside the archive (or use directly for bare .exe).
+	binaryInTmp, err := extractBinary(archivePath, tmpDir, repoName)
+	if err != nil {
+		return nil, err
 	}
 
 	dest := filepath.Join(opts.BinDir, destName)
@@ -103,12 +121,12 @@ func Run(opts Options) (*Result, error) {
 
 // ResolveURL returns the download URL for the latest Windows release asset
 // without downloading anything.
-func ResolveURL(repo string, verbose bool) (string, string, error) {
+func ResolveURL(repo string, match string, verbose bool) (string, string, error) {
 	release, err := github.LatestRelease(repo)
 	if err != nil {
 		return "", "", err
 	}
-	chosen, err := asset.Select(release.Assets, repoBaseName(repo), verbose)
+	chosen, err := asset.Select(release.Assets, repoBaseName(repo), match, verbose)
 	if err != nil {
 		return "", "", err
 	}
@@ -363,6 +381,164 @@ func extractGz(src, dest string) error {
 
 	if _, err := io.Copy(out, gz); err != nil {
 		return fmt.Errorf("install: decompress gz: %w", err)
+	}
+	return nil
+}
+
+// extractAndCopyAll extracts archivePath and copies all its contents into destDir.
+// For single-file .gz and bare .exe assets only that file is copied.
+func extractAndCopyAll(archivePath, destDir, tmpDir string, debug bool) error {
+	lower := strings.ToLower(archivePath)
+
+	switch {
+	case strings.HasSuffix(lower, ".exe"):
+		dst := filepath.Join(destDir, filepath.Base(archivePath))
+		if debug {
+			log.Printf("debug: bare exe → %s", dst)
+		}
+		return copyFile(archivePath, dst)
+
+	case strings.HasSuffix(lower, ".zip"):
+		if debug {
+			debugListZip(archivePath)
+		}
+		extractDir := filepath.Join(tmpDir, "extracted")
+		if err := extractZip(archivePath, extractDir); err != nil {
+			return err
+		}
+		if debug {
+			debugWalkDir("extracted", extractDir)
+		}
+		src := unwrapSingleDir(extractDir)
+		if debug {
+			if src != extractDir {
+				log.Printf("debug: unwrapped single top-level dir → %s", filepath.Base(src))
+			} else {
+				log.Printf("debug: no single top-level dir to unwrap, copying from %s", extractDir)
+			}
+		}
+		return copyDirContents(src, destDir, debug)
+
+	case strings.HasSuffix(lower, ".tar.gz") || strings.HasSuffix(lower, ".tgz"):
+		extractDir := filepath.Join(tmpDir, "extracted")
+		if err := extractTarGz(archivePath, extractDir); err != nil {
+			return err
+		}
+		if debug {
+			debugWalkDir("extracted", extractDir)
+		}
+		src := unwrapSingleDir(extractDir)
+		if debug {
+			if src != extractDir {
+				log.Printf("debug: unwrapped single top-level dir → %s", filepath.Base(src))
+			} else {
+				log.Printf("debug: no single top-level dir to unwrap, copying from %s", extractDir)
+			}
+		}
+		return copyDirContents(src, destDir, debug)
+
+	case strings.HasSuffix(lower, ".gz"):
+		outPath := strings.TrimSuffix(archivePath, ".gz")
+		if !strings.HasSuffix(strings.ToLower(outPath), ".exe") {
+			outPath += ".exe"
+		}
+		if err := extractGz(archivePath, outPath); err != nil {
+			return err
+		}
+		dst := filepath.Join(destDir, filepath.Base(outPath))
+		if debug {
+			log.Printf("debug: gz → %s", dst)
+		}
+		return copyFile(outPath, dst)
+
+	default:
+		return fmt.Errorf("install: unrecognised archive format: %s", filepath.Base(archivePath))
+	}
+}
+
+func debugListZip(archivePath string) {
+	r, err := zip.OpenReader(archivePath)
+	if err != nil {
+		log.Printf("debug: could not list zip: %v", err)
+		return
+	}
+	defer r.Close()
+	log.Printf("debug: zip contains %d entries:", len(r.File))
+	for _, f := range r.File {
+		log.Printf("debug:   [zip] %s (%d bytes)", f.Name, f.UncompressedSize64)
+	}
+}
+
+func debugWalkDir(label, dir string) {
+	log.Printf("debug: %s dir contents (%s):", label, dir)
+	_ = filepath.Walk(dir, func(p string, info os.FileInfo, err error) error {
+		if err != nil || p == dir {
+			return nil
+		}
+		kind := "file"
+		if info.IsDir() {
+			kind = "dir "
+		}
+		rel, _ := filepath.Rel(dir, p)
+		log.Printf("debug:   [%s] %s", kind, rel)
+		return nil
+	})
+}
+
+// unwrapSingleDir returns the sole subdirectory of dir when dir contains exactly
+// one entry and that entry is a directory; otherwise it returns dir unchanged.
+// This handles the common GitHub release layout where everything sits inside a
+// single top-level folder (e.g. tool-v1.0.0-windows-amd64/).
+func unwrapSingleDir(dir string) string {
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 1 || !entries[0].IsDir() {
+		return dir
+	}
+	return filepath.Join(dir, entries[0].Name())
+}
+
+// copyDirContents recursively copies all files and subdirectories from src into dst.
+func copyDirContents(src, dst string, debug bool) error {
+	return filepath.Walk(src, func(p string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, p)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		if info.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		if debug {
+			log.Printf("debug: copy %s → %s", rel, target)
+		}
+		if err := copyFile(p, target); err != nil {
+			log.Printf("debug: copy error: %v", err)
+			return err
+		}
+		return nil
+	})
+}
+
+// copyFile copies src to dst, creating parent directories as needed.
+func copyFile(src, dst string) error {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return fmt.Errorf("install: create dir: %w", err)
+	}
+	in, err := os.Open(src)
+	if err != nil {
+		return fmt.Errorf("install: open for copy: %w", err)
+	}
+	defer in.Close()
+	out, err := os.Create(dst)
+	if err != nil {
+		return fmt.Errorf("install: create for copy: %w", err)
+	}
+	defer out.Close()
+	if _, err := io.Copy(out, in); err != nil {
+		return fmt.Errorf("install: copy: %w", err)
 	}
 	return nil
 }
