@@ -19,7 +19,7 @@ import (
 )
 
 // version is overridden at build time via -ldflags "-X main.version=vX.Y".
-var version = "v1.3"
+var version = "v1.3.1"
 
 // Exit codes.
 const (
@@ -289,6 +289,10 @@ func handleUpdate(cfg *config.Config, pkgList *packages.List, zd *zipdown.Client
 
 	code := exitOK
 	for _, entry := range pkgList.Packages {
+		if entry.KeepVersion {
+			fmt.Printf("%s is pinned, skipping\n", entry.Repo)
+			continue
+		}
 		latest, _, err := install.ResolveURL(entry.Repo, entry.Match, cfg.UserAgent, g.verbose, g.debugHTTP)
 		if err != nil {
 			log.Printf("update %s: %v", entry.Repo, err)
@@ -382,6 +386,10 @@ func handleCheck(pkgList *packages.List, cfg *config.Config, g *globals) int {
 
 	code := exitOK
 	for _, e := range pkgList.Packages {
+		if e.KeepVersion {
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", e.Repo, e.Version, "-", "pinned")
+			continue
+		}
 		latest, _, err := install.ResolveURL(e.Repo, e.Match, cfg.UserAgent, g.verbose, g.debugHTTP)
 		if err != nil {
 			log.Printf("check %s: %v", e.Repo, err)

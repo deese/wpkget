@@ -10,11 +10,12 @@ import (
 
 // Entry represents a single tracked package.
 type Entry struct {
-	Repo       string `yaml:"repo"`
-	Version    string `yaml:"version"`
-	BinaryName string `yaml:"binary_name,omitempty"` // optional custom name for the installed .exe
-	Match      string `yaml:"match,omitempty"`        // optional glob pattern used to select the release asset
-	All        bool   `yaml:"all,omitempty"`           // when true, all archive contents are copied to bin_dir
+	Repo        string `yaml:"repo"`
+	Version     string `yaml:"version"`
+	BinaryName  string `yaml:"binary_name,omitempty"`  // optional custom name for the installed .exe
+	Match       string `yaml:"match,omitempty"`         // optional glob pattern used to select the release asset
+	All         bool   `yaml:"all,omitempty"`            // when true, all archive contents are copied to bin_dir
+	KeepVersion bool   `yaml:"keep_version,omitempty"`  // when true, skip update/check for this package
 }
 
 // List is the in-memory representation of packages.yaml.
