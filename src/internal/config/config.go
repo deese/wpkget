@@ -13,6 +13,7 @@ type Config struct {
 	BinDir       string `yaml:"bin_dir"`
 	ZipdownURL   string `yaml:"zipdown_url"`
 	ZipdownToken string `yaml:"zipdown_token"`
+	UserAgent    string `yaml:"user_agent"`
 }
 
 // Load reads the config file from the given path.
@@ -41,8 +42,22 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("config: read %s: %w", resolved, err)
 	}
 
-	if err := yaml.Unmarshal(data, cfg); err != nil {
+	var overlay Config
+	if err := yaml.Unmarshal(data, &overlay); err != nil {
 		return nil, fmt.Errorf("config: parse %s: %w", resolved, err)
+	}
+	// Merge: only overwrite defaults with values the user explicitly set.
+	if overlay.BinDir != "" {
+		cfg.BinDir = overlay.BinDir
+	}
+	if overlay.ZipdownURL != "" {
+		cfg.ZipdownURL = overlay.ZipdownURL
+	}
+	if overlay.ZipdownToken != "" {
+		cfg.ZipdownToken = overlay.ZipdownToken
+	}
+	if overlay.UserAgent != "" {
+		cfg.UserAgent = overlay.UserAgent
 	}
 
 	return cfg, nil
@@ -58,9 +73,11 @@ func writeDefaults(path string, cfg *Config) error {
 		"# https://github.com/deese/wpkget\n\n" +
 		"# Directory where binaries are installed.\n" +
 		"bin_dir: " + cfg.BinDir + "\n\n" +
-		"# zipdown service — leave empty to disable (future feature).\n" +
+		"# zipdown service — leave empty to disable.\n" +
 		"zipdown_url: \"\"\n" +
-		"zipdown_token: \"\"\n"
+		"zipdown_token: \"\"\n\n" +
+		"# User-Agent for HTTP requests.\n" +
+		"user_agent: \"" + cfg.UserAgent + "\"\n"
 
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		return fmt.Errorf("config: write default config: %w", err)
@@ -87,6 +104,7 @@ func resolvePath(flag string) (path string, isDefault bool) {
 func defaults() *Config {
 	appData := os.Getenv("APPDATA")
 	return &Config{
-		BinDir: filepath.Join(appData, "wpkget", "bin"),
+		BinDir:    filepath.Join(appData, "wpkget", "bin"),
+		UserAgent: "wpkget",
 	}
 }

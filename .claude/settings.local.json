@@ -2,7 +2,13 @@
   "permissions": {
     "allow": [
       "Bash(go mod:*)",
-      "Bash(go build:*)"
+      "Bash(go build:*)",
+      "Bash(cd /tmp)",
+      "Bash(go doc *)",
+      "Bash(go env *)",
+      "Bash(./go doc *)",
+      "Bash(ls -la \"$\\(go env GOROOT\\)/src/flag/\")",
+      "Bash(go help *)"
     ]
   }
 }

@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"net/http/httputil"
 	"os"
 	"path/filepath"
 	"time"
@@ -18,19 +20,27 @@ var ErrNotConfigured = errors.New("zipdown is not configured")
 
 // Client wraps the zipdown service.
 type Client struct {
-	url   string
-	token string
-	http  *http.Client
+	url       string
+	token     string
+	userAgent string
+	debugHTTP bool
+	http      *http.Client
 }
 
-// New creates a Client. Both url and token may be empty strings; in that case
+// New creates a Client. url and token may be empty strings; in that case
 // every call to Wrap returns ErrNotConfigured.
-func New(url, token string) *Client {
+func New(url, token, userAgent string) *Client {
 	return &Client{
-		url:   url,
-		token: token,
-		http:  &http.Client{Timeout: 120 * time.Second},
+		url:       url,
+		token:     token,
+		userAgent: userAgent,
+		http:      &http.Client{Timeout: 120 * time.Second},
 	}
+}
+
+// SetDebugHTTP enables or disables HTTP request/response dumping.
+func (c *Client) SetDebugHTTP(v bool) {
+	c.debugHTTP = v
 }
 
 // Wrap asks the zipdown service to download assetURL and return it wrapped in
@@ -38,7 +48,7 @@ func New(url, token string) *Client {
 // returned.
 //
 // Returns ErrNotConfigured when the client was created without a service URL.
-func (c *Client) Wrap(assetURL, destDir string) (string, error) {
+func (c *Client) Wrap(assetURL, destDir string, debugHTTP bool) (string, error) {
 	if c.url == "" {
 		return "", ErrNotConfigured
 	}
@@ -53,8 +63,16 @@ func (c *Client) Wrap(assetURL, destDir string) (string, error) {
 		return "", fmt.Errorf("zipdown: build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if c.userAgent != "" {
+		req.Header.Set("User-Agent", c.userAgent)
+	}
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+
+	if debugHTTP || c.debugHTTP {
+		dump, _ := httputil.DumpRequestOut(req, true)
+		log.Printf("debug-http: request:\n%s", dump)
 	}
 
 	resp, err := c.http.Do(req)
@@ -62,6 +80,11 @@ func (c *Client) Wrap(assetURL, destDir string) (string, error) {
 		return "", fmt.Errorf("zipdown: request failed: %w", err)
 	}
 	defer resp.Body.Close()
+
+	if debugHTTP || c.debugHTTP {
+		dump, _ := httputil.DumpResponse(resp, false)
+		log.Printf("debug-http: response:\n%s", dump)
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("zipdown: unexpected status %d", resp.StatusCode)

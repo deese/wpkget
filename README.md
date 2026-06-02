@@ -14,10 +14,19 @@ Or download the latest release binary and place it in a directory on your `PATH`
 
 wpkget looks for its config file at `%APPDATA%\wpkget\config.yaml` by default.
 Override with the `--config` flag or the `WPKGET_CONFIG` environment variable.
+The file is created automatically with commented defaults on first run.
 
 ```yaml
 # config.yaml
 bin_dir: "C:\\tools\\bin"       # destination folder for installed binaries
+
+# Optional: zipdown service for AV scanning / caching of bare .exe assets.
+zipdown_url: ""
+zipdown_token: ""
+
+# User-Agent sent with every HTTP request (GitHub API + asset downloads).
+# Defaults to "wpkget". Override per-run with --user-agent.
+user_agent: "wpkget"
 ```
 
 ## Usage
@@ -98,6 +107,13 @@ packages:
     version: "0.57.0"
   - repo: cli/cli
     version: "2.68.1"
+  - repo: BurntSushi/ripgrep
+    version: "14.1.1"
+    match: "*windows-msvc*.zip"
+  - repo: neovim/neovim
+    version: "v0.10.4"
+    binary_name: nvim
+    all: true
 ```
 
 The file is updated automatically after each successful install or update.
@@ -108,9 +124,11 @@ The file is updated automatically after each successful install or update.
 |------|-------------|
 | `--config <path>` | Path to config file |
 | `--bin-dir <path>` | Override destination directory for this run |
+| `--user-agent <ua>` | Override User-Agent header for HTTP requests |
 | `--dry-run` | Resolve and print what would be done without doing it |
 | `--verbose` | Enable verbose output |
 | `--debug` | Print step-by-step diagnostic output |
+| `--debug-http` | Dump outgoing HTTP requests and response bodies |
 
 ## Exit codes
 

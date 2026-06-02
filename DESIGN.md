@@ -10,22 +10,23 @@ wpkget is a single-binary Windows CLI tool that automates the download and insta
 
 ```
 wpkget/
-├── cmd/
-│   └── wpkget/
-│       └── main.go          # entry point, CLI wiring
-├── internal/
-│   ├── github/
-│   │   └── github.go        # GitHub Releases API client
-│   ├── asset/
-│   │   └── asset.go         # asset selection heuristics
-│   ├── install/
-│   │   └── install.go       # download → decompress → move → cleanup
-│   ├── packages/
-│   │   └── packages.go      # local package list (read/write YAML)
-│   ├── config/
-│   │   └── config.go        # config file loading and defaults
-│   └── zipdown/
-│       └── zipdown.go       # zipdown client (stubbed until service is live)
+├── src/
+│   ├── cmd/
+│   │   └── wpkget/
+│   │       └── main.go          # entry point, CLI wiring
+│   └── internal/
+│       ├── github/
+│       │   └── github.go        # GitHub Releases API client
+│       ├── asset/
+│       │   └── asset.go         # asset selection heuristics
+│       ├── install/
+│       │   └── install.go       # download → decompress → move → cleanup
+│       ├── packages/
+│       │   └── packages.go      # local package list (read/write YAML)
+│       ├── config/
+│       │   └── config.go        # config file loading and defaults
+│       └── zipdown/
+│           └── zipdown.go       # zipdown service client
 └── go.mod
 ```
 
@@ -37,9 +38,9 @@ All packages under `internal/` are unexported to keep the public surface minimal
 
 The entry point uses the standard `flag` package with subcommand dispatch. No third-party CLI framework is used — the command set is small enough that the standard library suffices and avoids dependency bloat.
 
-Subcommands: `install`, `update`, `list`, `remove`, `url`.
+Subcommands: `install`, `update`, `check`, `list`, `remove`, `url`.
 
-Global flags (`--config`, `--bin-dir`, `--dry-run`, `--verbose`) are parsed before the subcommand is dispatched.
+Global flags (`--config`, `--bin-dir`, `--user-agent`, `--dry-run`, `--verbose`, `--debug`, `--debug-http`) are parsed before the subcommand is dispatched.
 
 ---
 
@@ -63,10 +64,11 @@ The response is decoded into a minimal struct containing only the fields we need
 
 Asset selection is the most fragile part of the tool because release naming is not standardised. The heuristic runs in order:
 
-1. Reject assets whose extension is not in the allowed set: `.zip`, `.tar.gz`, `.gz`, `.exe`.
-2. Prefer assets whose name contains `windows` (case-insensitive).
-3. Among matching assets prefer `amd64` or `x86_64` over `386` or `i386`.
-4. If exactly one asset remains, use it. If more than one remains, pick the first match and log a warning listing the alternatives. If none remain, return an error with exit code 2.
+1. If `--match` is provided, only assets matching that glob pattern are considered.
+2. Otherwise, reject assets whose extension is not in the allowed set: `.zip`, `.tar.gz`, `.gz`, `.exe`.
+3. Prefer assets whose name contains `windows` (case-insensitive).
+4. Among matching assets prefer `amd64` or `x86_64` over `386` or `i386`.
+5. If exactly one asset remains, use it. If more than one remains, pick the first match and log a warning listing the alternatives. If none remain, return an error with exit code 2.
 
 The selection logic is isolated in `internal/asset` so it can be unit-tested independently without network calls.
 
@@ -80,9 +82,10 @@ The pipeline is a linear sequence of steps. Each step receives the output of the
 
 ```
 resolve asset URL
+    → [optional] zipdown wrap (bare .exe only, when zipdown_url is set)
     → download to temp file (%TEMP%\wpkget\<random>)
     → decompress (if archive)
-    → locate binary inside extracted contents
+    → locate binary inside extracted contents  (or copy all with --all)
     → move binary to bin_dir
     → delete temp directory
     → update packages.yaml
@@ -97,17 +100,17 @@ resolve asset URL
 
 No third-party decompression library is used. The standard library covers all formats used by GitHub release assets.
 
-**Binary identification inside archives:** After extraction, wpkget looks for `.exe` files in the extracted tree. If exactly one `.exe` is found it is used. If multiple are found, the one whose base name most closely matches the repository name is preferred (Levenshtein distance is overkill; a simple `strings.Contains` check suffices). If none are found the user receives an actionable error.
+**Binary identification inside archives:** After extraction, wpkget looks for `.exe` files in the extracted tree. If exactly one `.exe` is found it is used. If multiple are found, the one whose base name most closely matches the repository name is preferred (a simple `strings.Contains` check suffices). If none are found the user receives an actionable error.
+
+**`--all` mode:** When the `all` flag is set (stored per-entry in `packages.yaml`), the entire archive contents are copied to `bin_dir` instead of extracting a single binary. If the archive has a single top-level directory it is unwrapped first, so the files land directly in `bin_dir`. This handles tools like neovim that ship a full directory tree.
 
 **Move vs. copy:** `os.Rename` is attempted first (atomic on the same volume). If it fails (cross-volume), the tool falls back to copy + delete. This avoids a partial binary at the destination during the move.
 
 ---
 
-## zipdown integration (future)
+## zipdown integration
 
-When the asset is an `.exe` and no decompression is needed, a direct move would work. However, the zipdown service provides an alternative path: upload the URL to the service, receive a `.zip` in return, then proceed through the normal decompression pipeline.
-
-**Why bother?** zipdown is a custom service that may add value such as AV scanning, caching, or audit logging before the binary reaches the workstation. The tool should be ready to use it when it becomes available without a disruptive refactor.
+When the asset is a bare `.exe`, an optional zipdown service can intercept the download — useful for AV scanning, caching, or audit logging before the binary reaches the workstation.
 
 **Design decision:** The zipdown code lives in `internal/zipdown` and is called from the install pipeline after asset selection, only when:
 1. `zipdown_url` is set in config, and
@@ -125,7 +128,7 @@ Content-Type: application/json
 
 Response: a `.zip` file in the body. The client writes it to the temp dir and returns the path; the rest of the pipeline is unchanged.
 
-Until the service is live, `zipdown.go` exposes the same interface but returns `ErrNotConfigured` immediately. The install pipeline treats `ErrNotConfigured` as a signal to proceed with the direct `.exe` download instead.
+When `zipdown_url` is empty the client returns `ErrNotConfigured` immediately, and the install pipeline falls back to downloading the `.exe` directly. Configuring zipdown requires no code changes — it is purely a config option.
 
 ---
 
@@ -142,9 +145,12 @@ Schema:
 packages:
   - repo: owner/name
     version: "v1.2.3"
+    binary_name: custom-name   # optional: installed .exe name (without extension)
+    match: "*windows-amd64*"   # optional: glob used for asset selection
+    all: true                  # optional: copy all archive contents instead of a single .exe
 ```
 
-The file is read once at startup and written once at the end of a mutating command. There is no file locking — wpkget is not designed for concurrent invocations.
+All optional fields are omitted from the file when empty/false. The file is read once at startup and written once at the end of a mutating command. There is no file locking — wpkget is not designed for concurrent invocations.
 
 ---
 
@@ -155,7 +161,16 @@ Config is loaded from (in priority order):
 2. `WPKGET_CONFIG` environment variable
 3. `%APPDATA%\wpkget\config.yaml`
 
-Missing config file is not an error; defaults are used. `bin_dir` defaults to `%APPDATA%\wpkget\bin` and is created if it does not exist.
+Missing config file is not an error; defaults are used. When the default path is used and the file does not exist, it is created with commented default values as a starting point. Fields:
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `bin_dir` | `%APPDATA%\wpkget\bin` | Destination directory for installed binaries |
+| `zipdown_url` | `""` | zipdown service URL; empty disables the feature |
+| `zipdown_token` | `""` | Bearer token for the zipdown service |
+| `user_agent` | `""` | Custom User-Agent for all HTTP requests |
+
+`--bin-dir` and `--user-agent` CLI flags override the corresponding config fields for the duration of the run.
 
 ---
 

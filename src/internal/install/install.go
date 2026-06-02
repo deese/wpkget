@@ -3,14 +3,17 @@ package install
 import (
 	"archive/tar"
 	"archive/zip"
+	"bytes"
 	"compress/gzip"
 	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"net/http/httputil"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -29,6 +32,8 @@ type Options struct {
 	DryRun     bool
 	Verbose    bool
 	Debug      bool            // enable step-by-step diagnostic output
+	DebugHTTP  bool            // dump outgoing HTTP requests and response bodies
+	UserAgent  string          // custom User-Agent header for HTTP requests
 	Zipdown    *zipdown.Client // nil means zipdown is disabled
 }
 
@@ -40,10 +45,17 @@ type Result struct {
 
 var httpClient = &http.Client{Timeout: 120 * time.Second}
 
+// dprint logs a debug message when enabled is true.
+func dprint(enabled bool, format string, args ...any) {
+	if enabled {
+		log.Printf(format, args...)
+	}
+}
+
 // Run executes the full install pipeline for a single repository:
 // resolve → download → decompress → move → cleanup.
 func Run(opts Options) (*Result, error) {
-	release, err := github.LatestRelease(opts.Repo)
+	release, err := github.LatestRelease(opts.Repo, opts.UserAgent, opts.DebugHTTP)
 	if err != nil {
 		return nil, err
 	}
@@ -84,6 +96,7 @@ func Run(opts Options) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	dprint(opts.Debug, "debug: downloaded archive → %s", archivePath)
 
 	// Ensure the destination directory exists.
 	if err := os.MkdirAll(opts.BinDir, 0o755); err != nil {
@@ -92,7 +105,7 @@ func Run(opts Options) (*Result, error) {
 
 	if opts.All {
 		// Copy all archive contents to BinDir.
-		if err := extractAndCopyAll(archivePath, opts.BinDir, tmpDir, opts.Debug); err != nil {
+		if err := extractAndCopyAll(archivePath, opts.BinDir, tmpDir, opts.Debug, opts.DebugHTTP); err != nil {
 			return nil, err
 		}
 		if opts.Verbose {
@@ -102,7 +115,7 @@ func Run(opts Options) (*Result, error) {
 	}
 
 	// Locate the single binary inside the archive (or use directly for bare .exe).
-	binaryInTmp, err := extractBinary(archivePath, tmpDir, repoName)
+	binaryInTmp, err := extractBinary(archivePath, tmpDir, repoName, opts.DebugHTTP)
 	if err != nil {
 		return nil, err
 	}
@@ -121,8 +134,8 @@ func Run(opts Options) (*Result, error) {
 
 // ResolveURL returns the download URL for the latest Windows release asset
 // without downloading anything.
-func ResolveURL(repo string, match string, verbose bool) (string, string, error) {
-	release, err := github.LatestRelease(repo)
+func ResolveURL(repo, match, userAgent string, verbose, debugHTTP bool) (string, string, error) {
+	release, err := github.LatestRelease(repo, userAgent, debugHTTP)
 	if err != nil {
 		return "", "", err
 	}
@@ -140,7 +153,8 @@ func download(opts Options, chosen *github.Asset, tmpDir string) (string, error)
 	isBareExe := strings.ToLower(filepath.Ext(chosen.Name)) == ".exe"
 
 	if isBareExe && opts.Zipdown != nil {
-		path, err := opts.Zipdown.Wrap(chosen.BrowserDownloadURL, tmpDir)
+		dprint(opts.Debug, "debug: zipdown wrap %s", chosen.BrowserDownloadURL)
+		path, err := opts.Zipdown.Wrap(chosen.BrowserDownloadURL, tmpDir, opts.DebugHTTP)
 		if err == nil {
 			return path, nil
 		}
@@ -150,16 +164,35 @@ func download(opts Options, chosen *github.Asset, tmpDir string) (string, error)
 		// Fall through to direct download.
 	}
 
-	return downloadURL(chosen.BrowserDownloadURL, tmpDir, chosen.Name)
+	dprint(opts.Debug, "debug: download %s → %s", chosen.BrowserDownloadURL, filepath.Join(tmpDir, chosen.Name))
+	return downloadURL(chosen.BrowserDownloadURL, tmpDir, chosen.Name, opts.UserAgent, opts.DebugHTTP)
 }
 
 // downloadURL streams a URL to destDir/<name> and returns the full path.
-func downloadURL(url, destDir, name string) (string, error) {
-	resp, err := httpClient.Get(url)
+func downloadURL(url, destDir, name, userAgent string, debugHTTP bool) (string, error) {
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return "", fmt.Errorf("install: build request: %w", err)
+	}
+	if userAgent != "" {
+		req.Header.Set("User-Agent", userAgent)
+	}
+
+	if debugHTTP {
+		dump, _ := httputil.DumpRequestOut(req, true)
+		log.Printf("debug-http: request:\n%s", dump)
+	}
+
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("install: download %s: %w", url, err)
 	}
 	defer resp.Body.Close()
+
+	if debugHTTP {
+		dump, _ := httputil.DumpResponse(resp, false)
+		log.Printf("debug-http: response:\n%s", dump)
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("install: download returned status %d", resp.StatusCode)
@@ -182,7 +215,7 @@ func downloadURL(url, destDir, name string) (string, error) {
 // extractBinary decompresses archivePath into a subdirectory of tmpDir and
 // returns the path to the selected .exe.
 // If archivePath is itself a .exe it is returned as-is.
-func extractBinary(archivePath, tmpDir, repoName string) (string, error) {
+func extractBinary(archivePath, tmpDir, repoName string, debugHTTP bool) (string, error) {
 	lower := strings.ToLower(archivePath)
 
 	switch {
@@ -191,7 +224,7 @@ func extractBinary(archivePath, tmpDir, repoName string) (string, error) {
 
 	case strings.HasSuffix(lower, ".zip"):
 		extractDir := filepath.Join(tmpDir, "extracted")
-		if err := extractZip(archivePath, extractDir); err != nil {
+		if err := extractZip(archivePath, extractDir, debugHTTP); err != nil {
 			return "", err
 		}
 		return findBinary(extractDir, repoName)
@@ -254,11 +287,17 @@ func findBinary(dir, repoName string) (string, error) {
 	return exes[0], nil
 }
 
+// titleRegex extracts the content of an HTML <title> tag.
+var titleRegex = regexp.MustCompile(`(?i)<title[^>]*>([^<]*)</title>`)
+
 // extractZip unpacks a .zip archive into destDir.
-func extractZip(src, destDir string) error {
+// If the file is not a valid zip it inspects the contents: when it looks like
+// HTML the <title> is logged; when dumpBody is true the full body is dumped.
+func extractZip(src, destDir string, dumpBody bool) error {
 	r, err := zip.OpenReader(src)
 	if err != nil {
-		return fmt.Errorf("install: open zip: %w", err)
+		inspectInvalidZip(src, dumpBody)
+		return fmt.Errorf("install: open zip %s: %w", src, err)
 	}
 	defer r.Close()
 
@@ -268,6 +307,47 @@ func extractZip(src, destDir string) error {
 		}
 	}
 	return nil
+}
+
+// inspectInvalidZip reads the first 256 KiB of src and, when it appears to be
+// HTML, prints the <title> tag. If dumpBody is true the whole file is dumped.
+func inspectInvalidZip(src string, dumpBody bool) {
+	f, err := os.Open(src)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+
+	// Read enough to reliably find an HTML title (256 KiB cap).
+	limit := 256 * 1024
+	buf := make([]byte, limit)
+	n, _ := f.Read(buf)
+	if n == 0 {
+		return
+	}
+	snippet := string(buf[:n])
+
+	// Look for HTML indicators.
+	trimmed := strings.TrimLeft(snippet, " \t\r\n")
+	isHTML := strings.HasPrefix(strings.ToLower(trimmed), "<!doctype html") ||
+		strings.HasPrefix(strings.ToLower(trimmed), "<html") ||
+		strings.Contains(strings.ToLower(snippet), "<head")
+
+	if isHTML {
+		if m := titleRegex.FindStringSubmatch(snippet); len(m) > 1 {
+			log.Printf("warning: downloaded file is HTML, title: %q", strings.TrimSpace(m[1]))
+		} else {
+			log.Printf("warning: downloaded file is HTML (no <title> found)")
+		}
+	}
+
+	if dumpBody {
+		// Read the remainder and dump everything.
+		var rest bytes.Buffer
+		io.Copy(&rest, f)
+		full := append(buf[:n], rest.Bytes()...)
+		log.Printf("debug-http: invalid zip body (%d bytes):\n%s", len(full), full)
+	}
 }
 
 func extractZipEntry(f *zip.File, destDir string) error {
@@ -307,7 +387,7 @@ func extractZipEntry(f *zip.File, destDir string) error {
 func extractTarGz(src, destDir string) error {
 	f, err := os.Open(src)
 	if err != nil {
-		return fmt.Errorf("install: open tar.gz: %w", err)
+		return fmt.Errorf("install: open tar.gz %s: %w", src, err)
 	}
 	defer f.Close()
 
@@ -363,7 +443,7 @@ func extractTarEntry(hdr *tar.Header, r io.Reader, destDir string) error {
 func extractGz(src, dest string) error {
 	in, err := os.Open(src)
 	if err != nil {
-		return fmt.Errorf("install: open gz: %w", err)
+		return fmt.Errorf("install: open gz %s: %w", src, err)
 	}
 	defer in.Close()
 
@@ -387,35 +467,33 @@ func extractGz(src, dest string) error {
 
 // extractAndCopyAll extracts archivePath and copies all its contents into destDir.
 // For single-file .gz and bare .exe assets only that file is copied.
-func extractAndCopyAll(archivePath, destDir, tmpDir string, debug bool) error {
+func extractAndCopyAll(archivePath, destDir, tmpDir string, debug, debugHTTP bool) error {
 	lower := strings.ToLower(archivePath)
 
 	switch {
 	case strings.HasSuffix(lower, ".exe"):
 		dst := filepath.Join(destDir, filepath.Base(archivePath))
-		if debug {
-			log.Printf("debug: bare exe → %s", dst)
-		}
+		dprint(debug, "debug: bare exe → %s", dst)
 		return copyFile(archivePath, dst)
 
 	case strings.HasSuffix(lower, ".zip"):
+		dprint(debug, "debug: zip contains entries:")
 		if debug {
-			debugListZip(archivePath)
+			logZipEntries(archivePath)
 		}
 		extractDir := filepath.Join(tmpDir, "extracted")
-		if err := extractZip(archivePath, extractDir); err != nil {
+		if err := extractZip(archivePath, extractDir, debugHTTP); err != nil {
 			return err
 		}
+		dprint(debug, "debug: extracted dir contents:")
 		if debug {
-			debugWalkDir("extracted", extractDir)
+			logDirContents(extractDir)
 		}
 		src := unwrapSingleDir(extractDir)
-		if debug {
-			if src != extractDir {
-				log.Printf("debug: unwrapped single top-level dir → %s", filepath.Base(src))
-			} else {
-				log.Printf("debug: no single top-level dir to unwrap, copying from %s", extractDir)
-			}
+		if src != extractDir {
+			dprint(debug, "debug: unwrapped single top-level dir → %s", filepath.Base(src))
+		} else {
+			dprint(debug, "debug: no single top-level dir to unwrap, copying from %s", extractDir)
 		}
 		return copyDirContents(src, destDir, debug)
 
@@ -424,16 +502,15 @@ func extractAndCopyAll(archivePath, destDir, tmpDir string, debug bool) error {
 		if err := extractTarGz(archivePath, extractDir); err != nil {
 			return err
 		}
+		dprint(debug, "debug: extracted dir contents:")
 		if debug {
-			debugWalkDir("extracted", extractDir)
+			logDirContents(extractDir)
 		}
 		src := unwrapSingleDir(extractDir)
-		if debug {
-			if src != extractDir {
-				log.Printf("debug: unwrapped single top-level dir → %s", filepath.Base(src))
-			} else {
-				log.Printf("debug: no single top-level dir to unwrap, copying from %s", extractDir)
-			}
+		if src != extractDir {
+			dprint(debug, "debug: unwrapped single top-level dir → %s", filepath.Base(src))
+		} else {
+			dprint(debug, "debug: no single top-level dir to unwrap, copying from %s", extractDir)
 		}
 		return copyDirContents(src, destDir, debug)
 
@@ -446,9 +523,7 @@ func extractAndCopyAll(archivePath, destDir, tmpDir string, debug bool) error {
 			return err
 		}
 		dst := filepath.Join(destDir, filepath.Base(outPath))
-		if debug {
-			log.Printf("debug: gz → %s", dst)
-		}
+		dprint(debug, "debug: gz → %s", dst)
 		return copyFile(outPath, dst)
 
 	default:
@@ -456,7 +531,7 @@ func extractAndCopyAll(archivePath, destDir, tmpDir string, debug bool) error {
 	}
 }
 
-func debugListZip(archivePath string) {
+func logZipEntries(archivePath string) {
 	r, err := zip.OpenReader(archivePath)
 	if err != nil {
 		log.Printf("debug: could not list zip: %v", err)
@@ -469,8 +544,8 @@ func debugListZip(archivePath string) {
 	}
 }
 
-func debugWalkDir(label, dir string) {
-	log.Printf("debug: %s dir contents (%s):", label, dir)
+func logDirContents(dir string) {
+	log.Printf("debug: dir contents (%s):", dir)
 	_ = filepath.Walk(dir, func(p string, info os.FileInfo, err error) error {
 		if err != nil || p == dir {
 			return nil
@@ -511,11 +586,9 @@ func copyDirContents(src, dst string, debug bool) error {
 		if info.IsDir() {
 			return os.MkdirAll(target, 0o755)
 		}
-		if debug {
-			log.Printf("debug: copy %s → %s", rel, target)
-		}
+		dprint(debug, "debug: copy %s → %s", rel, target)
 		if err := copyFile(p, target); err != nil {
-			log.Printf("debug: copy error: %v", err)
+			dprint(debug, "debug: copy error: %v", err)
 			return err
 		}
 		return nil
