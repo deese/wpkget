@@ -13,6 +13,7 @@ type Entry struct {
 	Repo        string `yaml:"repo"`
 	Version     string `yaml:"version"`
 	BinaryName  string `yaml:"binary_name,omitempty"`  // optional custom name for the installed .exe
+	BinDir      string `yaml:"bin_dir,omitempty"`       // optional per-package destination directory
 	Match       string `yaml:"match,omitempty"`         // optional glob pattern used to select the release asset
 	All         bool   `yaml:"all,omitempty"`            // when true, all archive contents are copied to bin_dir
 	KeepVersion bool   `yaml:"keep_version,omitempty"`  // when true, skip update/check for this package
@@ -45,15 +46,18 @@ func Load(path string) (*List, error) {
 }
 
 // Upsert adds a new entry or updates the version of an existing one.
-// binaryName and match are stored only when non-empty; existing values are
+// binaryName, binDir and match are stored only when non-empty; existing values are
 // preserved when the argument is empty (i.e. update does not clear them).
 // all is always stored as-is.
-func (l *List) Upsert(repo, version, binaryName, match string, all bool) {
+func (l *List) Upsert(repo, version, binaryName, binDir, match string, all bool) {
 	for i, e := range l.Packages {
 		if e.Repo == repo {
 			l.Packages[i].Version = version
 			if binaryName != "" {
 				l.Packages[i].BinaryName = binaryName
+			}
+			if binDir != "" {
+				l.Packages[i].BinDir = binDir
 			}
 			if match != "" {
 				l.Packages[i].Match = match
@@ -62,7 +66,7 @@ func (l *List) Upsert(repo, version, binaryName, match string, all bool) {
 			return
 		}
 	}
-	l.Packages = append(l.Packages, Entry{Repo: repo, Version: version, BinaryName: binaryName, Match: match, All: all})
+	l.Packages = append(l.Packages, Entry{Repo: repo, Version: version, BinaryName: binaryName, BinDir: binDir, Match: match, All: all})
 }
 
 // Remove deletes the entry for repo. Returns true if it was present.

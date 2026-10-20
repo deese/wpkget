@@ -13,6 +13,7 @@ import (
 
 	"github.com/deese/wpkget/src/internal/asset"
 	"github.com/deese/wpkget/src/internal/config"
+	"github.com/deese/wpkget/src/internal/github"
 	"github.com/deese/wpkget/src/internal/install"
 	"github.com/deese/wpkget/src/internal/packages"
 	"github.com/deese/wpkget/src/internal/zipdown"
@@ -140,6 +141,8 @@ func main() {
 		os.Exit(runRemove(rest))
 	case "url":
 		os.Exit(runURL(rest))
+	case "show":
+		os.Exit(runShow(rest))
 	case "version", "--version", "-version":
 		fmt.Println(version)
 		os.Exit(exitOK)
@@ -157,6 +160,7 @@ func runInstall(args []string) int {
 		binaryName string
 		match      string
 		all        bool
+		binDir     string
 	)
 	fs := flag.NewFlagSet("install", flag.ExitOnError)
 	fs.Usage = usage
@@ -164,10 +168,11 @@ func runInstall(args []string) int {
 	fs.StringVar(&binaryName, "name", "", "rename the installed binary (single repo only)")
 	fs.StringVar(&match, "match", "", "glob pattern to select the release asset")
 	fs.BoolVar(&all, "all", false, "copy all archive contents to bin-dir")
+	fs.StringVar(&binDir, "bin-dir", "", "destination directory for this package (overrides config and global --bin-dir)")
 
 	repos := parseInterspersed(fs, args)
 	cfg, pkgList, zd := setup(&g)
-	return handleInstall(repos, binaryName, match, all, cfg, pkgList, zd, &g)
+	return handleInstall(repos, binaryName, binDir, match, all, cfg, pkgList, zd, &g)
 }
 
 // runUpdate parses global flags and delegates to handleUpdate.
@@ -229,8 +234,19 @@ func runURL(args []string) int {
 	return handleURL(repos, cfg, &g)
 }
 
+// runShow parses global flags and delegates to handleShow.
+func runShow(args []string) int {
+	var g globals
+	fs := flag.NewFlagSet("show", flag.ExitOnError)
+	fs.Usage = usage
+	registerGlobals(fs, &g)
+	repos := parseInterspersed(fs, args)
+	cfg, pkgList, _ := setup(&g)
+	return handleShow(repos, pkgList, cfg, &g)
+}
+
 // handleInstall downloads and installs the latest release for each given repo.
-func handleInstall(repos []string, binaryName, match string, all bool, cfg *config.Config, pkgList *packages.List, zd *zipdown.Client, g *globals) int {
+func handleInstall(repos []string, binaryName, binDir, match string, all bool, cfg *config.Config, pkgList *packages.List, zd *zipdown.Client, g *globals) int {
 	if len(repos) == 0 {
 		log.Print("install: missing <user/repo> argument")
 		return exitGeneral
@@ -238,6 +254,11 @@ func handleInstall(repos []string, binaryName, match string, all bool, cfg *conf
 	if binaryName != "" && len(repos) > 1 {
 		log.Print("install: --name can only be used with a single repo")
 		return exitGeneral
+	}
+
+	effectiveBinDir := cfg.BinDir
+	if binDir != "" {
+		effectiveBinDir = binDir
 	}
 
 	code := exitOK
@@ -250,7 +271,7 @@ func handleInstall(repos []string, binaryName, match string, all bool, cfg *conf
 
 		result, err := install.Run(install.Options{
 			Repo:       repo,
-			BinDir:     cfg.BinDir,
+			BinDir:     effectiveBinDir,
 			BinaryName: binaryName,
 			Match:      match,
 			All:        all,
@@ -268,7 +289,7 @@ func handleInstall(repos []string, binaryName, match string, all bool, cfg *conf
 		}
 
 		if !g.dryRun {
-			pkgList.Upsert(repo, result.Version, binaryName, match, all)
+			pkgList.Upsert(repo, result.Version, binaryName, binDir, match, all)
 			if err := pkgList.Save(); err != nil {
 				log.Printf("install %s: save package list: %v", repo, err)
 				code = exitGeneral
@@ -310,9 +331,14 @@ func handleUpdate(cfg *config.Config, pkgList *packages.List, zd *zipdown.Client
 			continue
 		}
 
+		effectiveBinDir := cfg.BinDir
+		if entry.BinDir != "" {
+			effectiveBinDir = entry.BinDir
+		}
+
 		result, err := install.Run(install.Options{
 			Repo:       entry.Repo,
-			BinDir:     cfg.BinDir,
+			BinDir:     effectiveBinDir,
 			BinaryName: entry.BinaryName,
 			Match:      entry.Match,
 			All:        entry.All,
@@ -329,7 +355,7 @@ func handleUpdate(cfg *config.Config, pkgList *packages.List, zd *zipdown.Client
 		}
 
 		fmt.Printf("updated %s %s → %s (%s)\n", entry.Repo, entry.Version, result.Version, result.BinaryPath)
-		pkgList.Upsert(entry.Repo, result.Version, entry.BinaryName, entry.Match, entry.All)
+		pkgList.Upsert(entry.Repo, result.Version, entry.BinaryName, entry.BinDir, entry.Match, entry.All)
 	}
 
 	if !g.dryRun {
@@ -350,25 +376,25 @@ func handleList(showURL bool, pkgList *packages.List, cfg *config.Config, g *glo
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	if showURL {
-		fmt.Fprintln(w, "REPO\tVERSION\tBINARY NAME\tURL")
+		fmt.Fprintln(w, "REPO\tVERSION\tBINARY NAME\tBIN DIR\tURL")
 	} else {
-		fmt.Fprintln(w, "REPO\tVERSION\tBINARY NAME")
+		fmt.Fprintln(w, "REPO\tVERSION\tBINARY NAME\tBIN DIR")
 	}
 
 	code := exitOK
 	for _, e := range pkgList.Packages {
 		if !showURL {
-			fmt.Fprintf(w, "%s\t%s\t%s\n", e.Repo, e.Version, e.BinaryName)
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", e.Repo, e.Version, e.BinaryName, e.BinDir)
 			continue
 		}
 		_, url, err := install.ResolveURL(e.Repo, e.Match, cfg.UserAgent, g.verbose, g.debugHTTP)
 		if err != nil {
 			log.Printf("list %s: resolve url: %v", e.Repo, err)
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", e.Repo, e.Version, e.BinaryName, "(error)")
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", e.Repo, e.Version, e.BinaryName, e.BinDir, "(error)")
 			code = mapError(err)
 			continue
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", e.Repo, e.Version, e.BinaryName, url)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", e.Repo, e.Version, e.BinaryName, e.BinDir, url)
 	}
 	w.Flush()
 	return code
@@ -457,6 +483,72 @@ func handleURL(repos []string, cfg *config.Config, g *globals) int {
 	return code
 }
 
+// handleShow prints detailed information about a package and lists all available release assets.
+func handleShow(repos []string, pkgList *packages.List, cfg *config.Config, g *globals) int {
+	if len(repos) == 0 {
+		log.Print("show: missing <user/repo> argument")
+		return exitGeneral
+	}
+
+	code := exitOK
+	for i, repo := range repos {
+		if err := validateRepo(repo); err != nil {
+			log.Printf("show %s: %v", repo, err)
+			code = exitGeneral
+			continue
+		}
+
+		if i > 0 {
+			fmt.Println()
+		}
+
+		release, err := github.LatestRelease(repo, cfg.UserAgent, g.debugHTTP)
+		if err != nil {
+			log.Printf("show %s: %v", repo, err)
+			code = mapError(err)
+			continue
+		}
+
+		fmt.Printf("repo:    %s\n", repo)
+		fmt.Printf("latest:  %s\n", release.TagName)
+
+		if entry := pkgList.Get(repo); entry != nil {
+			fmt.Printf("tracked: %s", entry.Version)
+			if entry.Version == release.TagName {
+				fmt.Print(" (up to date)")
+			} else {
+				fmt.Print(" (update available)")
+			}
+			fmt.Println()
+			if entry.BinaryName != "" {
+				fmt.Printf("binary:  %s\n", entry.BinaryName)
+			}
+			if entry.BinDir != "" {
+				fmt.Printf("bin_dir: %s\n", entry.BinDir)
+			}
+			if entry.Match != "" {
+				fmt.Printf("match:   %s\n", entry.Match)
+			}
+			if entry.All {
+				fmt.Printf("all:     true\n")
+			}
+			if entry.KeepVersion {
+				fmt.Printf("pinned:  true\n")
+			}
+		} else {
+			fmt.Println("tracked: no")
+		}
+
+		fmt.Printf("\nassets (%d):\n", len(release.Assets))
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		for _, a := range release.Assets {
+			fmt.Fprintf(w, "  %s\t%s\n", a.Name, a.BrowserDownloadURL)
+		}
+		w.Flush()
+	}
+	return code
+}
+
 // validateRepo checks that repo is in the "owner/name" form.
 func validateRepo(repo string) error {
 	parts := strings.SplitN(repo, "/", 2)
@@ -494,12 +586,14 @@ Commands:
            [--match <pattern>] glob pattern to select the release asset
                                (e.g. --match "*windows-amd64*.zip")
            [--all]             copy all archive contents (files + folders) to bin-dir
+           [--bin-dir <path>]  destination directory for this package (saved per-package)
   update                       check all tracked packages for new releases
   list    [-v]                 list tracked packages and their versions
                                -v: include resolved download URL
   check                        show latest available version for each tracked package
   remove  <user/repo> [...]    remove packages from tracking (binary not deleted)
   url     <user/repo> [...]    print the download URL without installing
+  show    <user/repo> [...]    show package details and all available release assets
   version                      print version and exit
 
 Flags (accepted anywhere on the command line):

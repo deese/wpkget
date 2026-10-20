@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"time"
 
@@ -213,8 +214,8 @@ func downloadURL(url, destDir, name, userAgent string, debugHTTP bool) (string, 
 }
 
 // extractBinary decompresses archivePath into a subdirectory of tmpDir and
-// returns the path to the selected .exe.
-// If archivePath is itself a .exe it is returned as-is.
+// returns the path to the selected binary.
+// If archivePath is itself a bare binary it is returned as-is.
 func extractBinary(archivePath, tmpDir, repoName string, debugHTTP bool) (string, error) {
 	lower := strings.ToLower(archivePath)
 
@@ -237,13 +238,17 @@ func extractBinary(archivePath, tmpDir, repoName string, debugHTTP bool) (string
 		return findBinary(extractDir, repoName)
 
 	case strings.HasSuffix(lower, ".gz"):
-		// Single file gzip — decompress to a .exe.
 		outPath := strings.TrimSuffix(archivePath, ".gz")
-		if !strings.HasSuffix(strings.ToLower(outPath), ".exe") {
+		if runtime.GOOS == "windows" && !strings.HasSuffix(strings.ToLower(outPath), ".exe") {
 			outPath += ".exe"
 		}
 		if err := extractGz(archivePath, outPath); err != nil {
 			return "", err
+		}
+		if runtime.GOOS != "windows" {
+			if err := os.Chmod(outPath, 0o755); err != nil {
+				return "", fmt.Errorf("install: chmod extracted binary: %w", err)
+			}
 		}
 		return outPath, nil
 
@@ -252,15 +257,17 @@ func extractBinary(archivePath, tmpDir, repoName string, debugHTTP bool) (string
 	}
 }
 
-// findBinary walks dir and returns the path of the best-matching .exe.
+// findBinary walks dir and returns the path of the best-matching binary.
+// On Windows it looks for .exe files. On other platforms it looks for files
+// with the executable bit set and no extension, falling back to .exe if none found.
 func findBinary(dir, repoName string) (string, error) {
-	var exes []string
-	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
+	var candidates []string
+	err := filepath.Walk(dir, func(p string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
 			return err
 		}
-		if !info.IsDir() && strings.ToLower(filepath.Ext(path)) == ".exe" {
-			exes = append(exes, path)
+		if isBinaryCandidate(p, info) {
+			candidates = append(candidates, p)
 		}
 		return nil
 	})
@@ -268,23 +275,35 @@ func findBinary(dir, repoName string) (string, error) {
 		return "", fmt.Errorf("install: walk extracted dir: %w", err)
 	}
 
-	if len(exes) == 0 {
-		return "", fmt.Errorf("install: no .exe found in archive")
+	if len(candidates) == 0 {
+		return "", fmt.Errorf("install: no executable binary found in archive")
 	}
-	if len(exes) == 1 {
-		return exes[0], nil
+	if len(candidates) == 1 {
+		return candidates[0], nil
 	}
 
 	// Prefer the one whose base name contains the repo name.
-	for _, p := range exes {
-		if strings.Contains(strings.ToLower(filepath.Base(p)), strings.ToLower(repoName)) {
+	for _, p := range candidates {
+		base := strings.ToLower(strings.TrimSuffix(filepath.Base(p), ".exe"))
+		if strings.Contains(base, strings.ToLower(repoName)) {
 			return p, nil
 		}
 	}
 
-	// Fall back to the first one and warn.
-	log.Printf("warning: multiple .exe files found, using %s", filepath.Base(exes[0]))
-	return exes[0], nil
+	log.Printf("warning: multiple binaries found, using %s", filepath.Base(candidates[0]))
+	return candidates[0], nil
+}
+
+// isBinaryCandidate reports whether a file should be considered as the target binary.
+func isBinaryCandidate(p string, info os.FileInfo) bool {
+	lower := strings.ToLower(p)
+	if strings.HasSuffix(lower, ".exe") {
+		return true
+	}
+	if runtime.GOOS != "windows" && filepath.Ext(p) == "" && (info.Mode()&0o111 != 0) {
+		return true
+	}
+	return false
 }
 
 // titleRegex extracts the content of an HTML <title> tag.
@@ -427,7 +446,11 @@ func extractTarEntry(hdr *tar.Header, r io.Reader, destDir string) error {
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 			return fmt.Errorf("install: create dir for tar entry: %w", err)
 		}
-		out, err := os.Create(target)
+		perm := hdr.FileInfo().Mode().Perm()
+		if perm == 0 {
+			perm = 0o644
+		}
+		out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, perm)
 		if err != nil {
 			return fmt.Errorf("install: create tar entry %q: %w", hdr.Name, err)
 		}
@@ -516,11 +539,16 @@ func extractAndCopyAll(archivePath, destDir, tmpDir string, debug, debugHTTP boo
 
 	case strings.HasSuffix(lower, ".gz"):
 		outPath := strings.TrimSuffix(archivePath, ".gz")
-		if !strings.HasSuffix(strings.ToLower(outPath), ".exe") {
+		if runtime.GOOS == "windows" && !strings.HasSuffix(strings.ToLower(outPath), ".exe") {
 			outPath += ".exe"
 		}
 		if err := extractGz(archivePath, outPath); err != nil {
 			return err
+		}
+		if runtime.GOOS != "windows" {
+			if err := os.Chmod(outPath, 0o755); err != nil {
+				return fmt.Errorf("install: chmod extracted binary: %w", err)
+			}
 		}
 		dst := filepath.Join(destDir, filepath.Base(outPath))
 		dprint(debug, "debug: gz → %s", dst)
@@ -653,15 +681,14 @@ func repoBaseName(repo string) string {
 	return repo
 }
 
-// resolveDestName returns the final .exe filename for the installed binary.
-// If binaryName is provided it is used (with .exe appended if missing);
-// otherwise the repo base name is used.
+// resolveDestName returns the final filename for the installed binary.
+// On Windows it appends .exe if missing. On other platforms no extension is added.
 func resolveDestName(binaryName, repoName string) string {
 	name := repoName
 	if binaryName != "" {
 		name = binaryName
 	}
-	if !strings.HasSuffix(strings.ToLower(name), ".exe") {
+	if runtime.GOOS == "windows" && !strings.HasSuffix(strings.ToLower(name), ".exe") {
 		name += ".exe"
 	}
 	return name
