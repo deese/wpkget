@@ -12,9 +12,15 @@ Or download the latest release binary and place it in a directory on your `PATH`
 
 ## Configuration
 
-wpkget looks for its config file at `%APPDATA%\wpkget\config.yaml` by default.
+wpkget looks for its config file at a platform-specific default location.
 Override with the `--config` flag or the `WPKGET_CONFIG` environment variable.
 The file is created automatically with commented defaults on first run.
+
+| OS      | Default path |
+|---------|-------------|
+| Windows | `%APPDATA%\wpkget\config.yaml` |
+| Linux   | `$XDG_CONFIG_HOME/wpkget/config.yaml` (fallback: `~/.config/wpkget/config.yaml`) |
+| macOS   | `$XDG_CONFIG_HOME/wpkget/config.yaml` (fallback: `~/.config/wpkget/config.yaml`) |
 
 ```yaml
 # config.yaml

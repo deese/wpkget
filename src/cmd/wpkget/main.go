@@ -20,7 +20,7 @@ import (
 )
 
 // version is overridden at build time via -ldflags "-X main.version=vX.Y".
-var version = "v1.3.2"
+var version = "v1.3.3"
 
 // Exit codes.
 const (
@@ -569,8 +569,7 @@ func pkgListFile(cfgPath string) string {
 	if cfgPath != "" {
 		return filepath.Join(filepath.Dir(cfgPath), "packages.yaml")
 	}
-	appData := os.Getenv("APPDATA")
-	return filepath.Join(appData, "wpkget", "packages.yaml")
+	return filepath.Join(config.DefaultDir(), "packages.yaml")
 }
 
 func usage() {

@@ -16,6 +16,23 @@ type Config struct {
 	UserAgent    string `yaml:"user_agent"`
 }
 
+// DefaultDir returns the platform-appropriate config directory for wpkget.
+// Windows: %APPDATA%\wpkget
+// Linux/Mac: $XDG_CONFIG_HOME/wpkget or ~/.config/wpkget
+func DefaultDir() string {
+	if appData := os.Getenv("APPDATA"); appData != "" {
+		return filepath.Join(appData, "wpkget")
+	}
+	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+		return filepath.Join(xdg, "wpkget")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".config", "wpkget")
+}
+
 // Load reads the config file from the given path.
 // If path is empty it falls back to WPKGET_CONFIG env var,
 // then to %APPDATA%\wpkget\config.yaml.
@@ -94,17 +111,17 @@ func resolvePath(flag string) (path string, isDefault bool) {
 	if env := os.Getenv("WPKGET_CONFIG"); env != "" {
 		return env, false
 	}
-	appData := os.Getenv("APPDATA")
-	if appData == "" {
+	dir := DefaultDir()
+	if dir == "" {
 		return "", false
 	}
-	return filepath.Join(appData, "wpkget", "config.yaml"), true
+	return filepath.Join(dir, "config.yaml"), true
 }
 
 func defaults() *Config {
-	appData := os.Getenv("APPDATA")
+	dir := DefaultDir()
 	return &Config{
-		BinDir:    filepath.Join(appData, "wpkget", "bin"),
+		BinDir:    filepath.Join(dir, "bin"),
 		UserAgent: "wpkget",
 	}
 }
