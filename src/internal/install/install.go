@@ -253,6 +253,13 @@ func extractBinary(archivePath, tmpDir, repoName string, debugHTTP bool) (string
 		return outPath, nil
 
 	default:
+		// Bare extensionless file on non-Windows: treat as a direct binary.
+		if runtime.GOOS != "windows" && filepath.Ext(archivePath) == "" {
+			if err := os.Chmod(archivePath, 0o755); err != nil {
+				return "", fmt.Errorf("install: chmod bare binary: %w", err)
+			}
+			return archivePath, nil
+		}
 		return "", fmt.Errorf("install: unrecognised archive format: %s", filepath.Base(archivePath))
 	}
 }

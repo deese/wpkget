@@ -54,6 +54,10 @@ func Select(assets []github.Asset, repoName string, match string, verbose bool) 
 		if arch := filterByArch(candidates, goarch); len(arch) > 0 {
 			candidates = arch
 		}
+		// Prefer glibc over musl when both are available.
+		if noMusl := filterByExcludingMusl(candidates); len(noMusl) > 0 {
+			candidates = noMusl
+		}
 	}
 
 	if len(candidates) > 1 && verbose {
@@ -72,6 +76,9 @@ func filterByExt(assets []github.Asset) []github.Asset {
 	var out []github.Asset
 	for _, a := range assets {
 		if hasAllowedExt(a.Name) {
+			out = append(out, a)
+		} else if runtime.GOOS != "windows" && !strings.Contains(a.Name, ".") {
+			// Bare extensionless files are common Linux/macOS release binaries.
 			out = append(out, a)
 		}
 	}
@@ -178,6 +185,16 @@ func filterByArch(assets []github.Asset, goarch string) []github.Asset {
 		}
 	}
 	return nil
+}
+
+func filterByExcludingMusl(assets []github.Asset) []github.Asset {
+	var out []github.Asset
+	for _, a := range assets {
+		if !strings.Contains(strings.ToLower(a.Name), "musl") {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 func filterByGlob(assets []github.Asset, pattern string) ([]github.Asset, error) {
