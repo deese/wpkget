@@ -1,8 +1,9 @@
 name: Release
 
 on:
-  release:
-    types: [created]
+  push:
+    tags:
+      - 'v*'
 
 
 jobs:
@@ -42,7 +43,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload ${{ github.event.release.tag_name }} \
+          gh release create ${{ github.ref_name }} \
+            --title "${{ github.ref_name }}" \
+            --generate-notes \
+            wpkget_windows_${{ matrix.goarch }}.exe \
+            wpkget_windows_${{ matrix.goarch }}.zip \
+            --clobber || \
+          gh release upload ${{ github.ref_name }} \
             wpkget_windows_${{ matrix.goarch }}.exe \
             wpkget_windows_${{ matrix.goarch }}.zip \
             --clobber
