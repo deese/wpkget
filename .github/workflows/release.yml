@@ -47,8 +47,7 @@ jobs:
             --title "${{ github.ref_name }}" \
             --generate-notes \
             wpkget_windows_${{ matrix.goarch }}.exe \
-            wpkget_windows_${{ matrix.goarch }}.zip \
-            --clobber || \
+            wpkget_windows_${{ matrix.goarch }}.zip || \
           gh release upload ${{ github.ref_name }} \
             wpkget_windows_${{ matrix.goarch }}.exe \
             wpkget_windows_${{ matrix.goarch }}.zip \
