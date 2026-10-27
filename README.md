@@ -40,6 +40,7 @@ wpkget install <user/repo> [...]
          [--name <binary>]    rename the installed binary (single repo only)
          [--match <pattern>]  glob to select the release asset
          [--all]              copy all archive contents to bin-dir
+         [--bin-dir <path>]   destination directory for this package (saved per-package)
 ```
 
 Example:
@@ -114,6 +115,9 @@ packages:
     version: "v0.10.4"
     binary_name: nvim
     all: true
+  - repo: someuser/sometool
+    version: "1.0.0"
+    bin_dir: "D:\\custom\\path"
 ```
 
 The file is updated automatically after each successful install or update.
@@ -123,7 +127,7 @@ The file is updated automatically after each successful install or update.
 | Flag | Description |
 |------|-------------|
 | `--config <path>` | Path to config file |
-| `--bin-dir <path>` | Override destination directory for this run |
+| `--bin-dir <path>` | Override destination directory (global or per-package when used with `install`) |
 | `--user-agent <ua>` | Override User-Agent header for HTTP requests |
 | `--dry-run` | Resolve and print what would be done without doing it |
 | `--verbose` | Enable verbose output |

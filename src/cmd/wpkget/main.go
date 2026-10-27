@@ -20,7 +20,7 @@ import (
 )
 
 // version is overridden at build time via -ldflags "-X main.version=vX.Y".
-var version = "v1.3.1"
+var version = "v1.3.2"
 
 // Exit codes.
 const (
@@ -160,7 +160,6 @@ func runInstall(args []string) int {
 		binaryName string
 		match      string
 		all        bool
-		binDir     string
 	)
 	fs := flag.NewFlagSet("install", flag.ExitOnError)
 	fs.Usage = usage
@@ -168,11 +167,10 @@ func runInstall(args []string) int {
 	fs.StringVar(&binaryName, "name", "", "rename the installed binary (single repo only)")
 	fs.StringVar(&match, "match", "", "glob pattern to select the release asset")
 	fs.BoolVar(&all, "all", false, "copy all archive contents to bin-dir")
-	fs.StringVar(&binDir, "bin-dir", "", "destination directory for this package (overrides config and global --bin-dir)")
 
 	repos := parseInterspersed(fs, args)
 	cfg, pkgList, zd := setup(&g)
-	return handleInstall(repos, binaryName, binDir, match, all, cfg, pkgList, zd, &g)
+	return handleInstall(repos, binaryName, g.binDir, match, all, cfg, pkgList, zd, &g)
 }
 
 // runUpdate parses global flags and delegates to handleUpdate.
