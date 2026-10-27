@@ -126,6 +126,12 @@ func Run(opts Options) (*Result, error) {
 		return nil, fmt.Errorf("install: move binary: %w", err)
 	}
 
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(dest, 0o755); err != nil {
+			return nil, fmt.Errorf("install: chmod binary: %w", err)
+		}
+	}
+
 	if opts.Verbose {
 		log.Printf("installed %s %s → %s", opts.Repo, release.TagName, dest)
 	}
