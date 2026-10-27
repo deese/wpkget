@@ -20,7 +20,7 @@ import (
 )
 
 // version is overridden at build time via -ldflags "-X main.version=vX.Y".
-var version = "v1.3.6"
+var version = "v1.3.7"
 
 // Exit codes.
 const (

@@ -447,7 +447,8 @@ func extractTarGz(src, destDir string) error {
 
 func extractTarEntry(hdr *tar.Header, r io.Reader, destDir string) error {
 	target := filepath.Join(destDir, filepath.FromSlash(hdr.Name))
-	if !strings.HasPrefix(target, filepath.Clean(destDir)+string(os.PathSeparator)) {
+	cleanDest := filepath.Clean(destDir)
+	if target != cleanDest && !strings.HasPrefix(target, cleanDest+string(os.PathSeparator)) {
 		return fmt.Errorf("install: tar-slip detected in entry %q", hdr.Name)
 	}
 
