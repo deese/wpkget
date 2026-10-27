@@ -22,6 +22,13 @@ The file is created automatically with commented defaults on first run.
 | Linux   | `$XDG_CONFIG_HOME/wpkget/config.yaml` (fallback: `~/.config/wpkget/config.yaml`) |
 | macOS   | `$XDG_CONFIG_HOME/wpkget/config.yaml` (fallback: `~/.config/wpkget/config.yaml`) |
 
+The default `bin_dir` is also platform-specific:
+
+| OS      | Default `bin_dir` |
+|---------|------------------|
+| Windows | `%APPDATA%\wpkget\bin` |
+| Linux / macOS | `~/.local/bin` |
+
 ```yaml
 # config.yaml
 bin_dir: "C:\\tools\\bin"       # destination folder for installed binaries

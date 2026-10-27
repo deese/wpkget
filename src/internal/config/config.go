@@ -119,9 +119,22 @@ func resolvePath(flag string) (path string, isDefault bool) {
 }
 
 func defaults() *Config {
-	dir := DefaultDir()
 	return &Config{
-		BinDir:    filepath.Join(dir, "bin"),
+		BinDir:    defaultBinDir(),
 		UserAgent: "wpkget",
 	}
+}
+
+// defaultBinDir returns the platform-appropriate default binary directory.
+// Windows: %APPDATA%\wpkget\bin
+// Linux/macOS: ~/.local/bin
+func defaultBinDir() string {
+	if appData := os.Getenv("APPDATA"); appData != "" {
+		return filepath.Join(appData, "wpkget", "bin")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".local", "bin")
 }
