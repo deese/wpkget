@@ -41,6 +41,10 @@ zipdown_token: ""
 # Defaults to "wpkget". Override per-run with --user-agent.
 user_agent: "wpkget"
 
+# Download progress bar: auto (terminals only), always or never.
+# Override per run with --progress.
+progress: auto
+
 # Optional: self-hosted GitLab instances (see "GitLab" below).
 gitlab_hosts:
   git.example.com:
@@ -239,6 +243,29 @@ The file is updated automatically after each successful install or update.
 | `--verbose` | Enable verbose output |
 | `--debug` | Print step-by-step diagnostic output |
 | `--debug-http` | Dump outgoing HTTP requests and response bodies |
+| `--progress <mode>` | Download progress bar: `auto` (default), `always` or `never`. Overrides the `progress` config key |
+
+### Download behavior
+
+Before each download wpkget prints `downloading <asset> from <host>` and, until the first byte arrives, a live `waiting for server... Ns` counter (same visibility rules as the progress bar below). This matters behind proxies that buffer the whole file before forwarding it, where the wait can last over a minute.
+
+There is no overall download timeout, so large files over slow links work. Two limits apply instead: 10 minutes to receive the response headers, and 2 minutes without receiving any data once the body has started.
+
+When the provider publishes the asset size (GitHub does) wpkget checks that the downloaded file has exactly that size, and it also checks the SHA-256 when the API reports a `digest`. A mismatch aborts the install with a message such as `size mismatch … (the download was truncated or modified in transit)`. Nothing is checked for assets whose size or digest is not reported (GitLab release links, and downloads routed through zipdown).
+
+Some proxies treat unknown clients differently, for example by trickling a partial file while it is scanned. wpkget identifies itself with the `user_agent` setting (default `wpkget`), which a proxy rule can match.
+
+### Progress bar
+
+Downloads draw a one-line progress bar on stderr:
+
+```
+winpass_windows_amd64.zip  [##########----------]  50%  2.0/4.0 MiB  1.0 MiB/s
+```
+
+When the server does not report the size, only the counters are shown. When the download ends the line is replaced by a summary with the total size and elapsed time.
+
+In `auto` mode the bar is drawn only when stderr is a terminal, so logs and pipes stay clean, and it is hidden while `--verbose`, `--debug` or `--debug-http` are active because their output shares stderr. Terminals that Go cannot recognize as such, notably Git Bash (mintty), need `--progress always` (or `progress: always` in the config). Set `progress: never` in the config to turn it off permanently. Downloads routed through the zipdown service are not shown.
 
 ## Exit codes
 

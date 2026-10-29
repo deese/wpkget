@@ -16,11 +16,11 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
-	"time"
 
 	"github.com/deese/wpkget/src/internal/asset"
 	"github.com/deese/wpkget/src/internal/github"
 	"github.com/deese/wpkget/src/internal/gitlab"
+	"github.com/deese/wpkget/src/internal/progress"
 	"github.com/deese/wpkget/src/internal/zipdown"
 )
 
@@ -38,6 +38,7 @@ type Options struct {
 	Debug      bool            // enable step-by-step diagnostic output
 	DebugHTTP  bool            // dump outgoing HTTP requests and response bodies
 	UserAgent  string          // custom User-Agent header for HTTP requests
+	Progress   io.Writer       // where to draw the download progress bar; nil disables it
 	Zipdown    *zipdown.Client // nil means zipdown is disabled
 }
 
@@ -47,7 +48,8 @@ type Result struct {
 	BinaryPath string // final location of the installed binary
 }
 
-var httpClient = &http.Client{Timeout: 120 * time.Second}
+// httpClient has no overall timeout: downloads are bounded by the header and idle timeouts in downloadURL.
+var httpClient = &http.Client{}
 
 // latestRelease dispatches to the correct provider based on opts.Provider.
 func latestRelease(provider, host, repo, userAgent string, debugHTTP bool) (*github.Release, error) {
@@ -196,12 +198,25 @@ func download(opts Options, chosen *github.Asset, tmpDir string) (string, error)
 	}
 
 	dprint(opts.Debug, "debug: download %s → %s", chosen.BrowserDownloadURL, filepath.Join(tmpDir, chosen.Name))
-	return downloadURL(chosen.BrowserDownloadURL, tmpDir, chosen.Name, opts.UserAgent, opts.DebugHTTP)
+	path, err := downloadURL(chosen.BrowserDownloadURL, tmpDir, chosen.Name, opts.UserAgent, opts.DebugHTTP, opts.Progress)
+	if err != nil {
+		return "", err
+	}
+	if err := verifyDownload(path, chosen); err != nil {
+		return "", err
+	}
+	dprint(opts.Debug, "debug: verified %s (size %d, digest %q)", chosen.Name, chosen.Size, chosen.Digest)
+	return path, nil
 }
 
 // downloadURL streams a URL to destDir/<name> and returns the full path.
-func downloadURL(url, destDir, name, userAgent string, debugHTTP bool) (string, error) {
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+// When progressOut is non-nil it announces the download, shows a counter while
+// waiting for the server and then draws a progress bar on it.
+func downloadURL(url, destDir, name, userAgent string, debugHTTP bool, progressOut io.Writer) (string, error) {
+	ctx, cancel, timer := newDownloadContext()
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", fmt.Errorf("install: build request: %w", err)
 	}
@@ -221,14 +236,26 @@ func downloadURL(url, destDir, name, userAgent string, debugHTTP bool) (string, 
 		return "", fmt.Errorf("install: %w", err)
 	}
 	if glClient != nil {
-		client = glClient
+		c := *glClient
+		c.Timeout = 0 // bounded by the header and idle timeouts instead
+		client = &c
 	}
 
+	stopWait := func() {}
+	if progressOut != nil {
+		fmt.Fprintf(progressOut, "downloading %s from %s\n", name, req.URL.Host)
+		stopWait = progress.StartWait(progressOut, name)
+	}
 	resp, err := client.Do(req)
+	stopWait()
 	if err != nil {
+		if ctx.Err() != nil {
+			return "", fmt.Errorf("install: no response from %s after %s", req.URL.Host, downloadHeaderTimeout)
+		}
 		return "", fmt.Errorf("install: download %s: %w", url, err)
 	}
 	defer resp.Body.Close()
+	timer.Reset(downloadIdleTimeout)
 
 	if debugHTTP {
 		dump, _ := httputil.DumpResponse(resp, false)
@@ -246,8 +273,22 @@ func downloadURL(url, destDir, name, userAgent string, debugHTTP bool) (string, 
 	}
 	defer f.Close()
 
-	if _, err := io.Copy(f, resp.Body); err != nil {
+	var body io.Reader = &idleReader{r: resp.Body, timer: timer}
+	var bar *progress.Reader
+	if progressOut != nil {
+		bar = progress.NewReader(body, progressOut, name, resp.ContentLength)
+		defer bar.Close()
+		body = bar
+	}
+
+	if _, err := io.Copy(f, body); err != nil {
+		if ctx.Err() != nil {
+			return "", fmt.Errorf("install: download stalled: no data received for %s", downloadIdleTimeout)
+		}
 		return "", fmt.Errorf("install: write download: %w", err)
+	}
+	if bar != nil {
+		bar.Finish()
 	}
 
 	return dest, nil

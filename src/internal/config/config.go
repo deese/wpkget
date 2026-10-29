@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"runtime"
 
+	"github.com/deese/wpkget/src/internal/progress"
+
 	"gopkg.in/yaml.v3"
 )
 
@@ -22,6 +24,9 @@ type Config struct {
 	// PassCmd is the pass-compatible binary used for token_pass lookups.
 	// Defaults to "winpass" on Windows and "pass" elsewhere.
 	PassCmd string `yaml:"pass_cmd"`
+	// Progress controls the download progress bar: "auto" (terminals only),
+	// "always" or "never". Overridden per run by --progress.
+	Progress string `yaml:"progress"`
 }
 
 // GitLabHost holds the per-instance settings of a self-hosted GitLab.
@@ -106,6 +111,12 @@ func Load(path string) (*Config, error) {
 	if overlay.PassCmd != "" {
 		cfg.PassCmd = overlay.PassCmd
 	}
+	if overlay.Progress != "" {
+		if !progress.ValidMode(overlay.Progress) {
+			return nil, fmt.Errorf("config: %s: invalid progress %q (want auto, always or never)", resolved, overlay.Progress)
+		}
+		cfg.Progress = overlay.Progress
+	}
 	cfg.GitLabHosts = overlay.GitLabHosts
 
 	return cfg, nil
@@ -126,6 +137,9 @@ func writeDefaults(path string, cfg *Config) error {
 		"zipdown_token: \"\"\n\n" +
 		"# User-Agent for HTTP requests.\n" +
 		"user_agent: \"" + cfg.UserAgent + "\"\n\n" +
+		"# Download progress bar: auto (terminals only), always or never.\n" +
+		"# Override per run with --progress.\n" +
+		"progress: " + progress.Auto + "\n\n" +
 		"# Self-hosted GitLab instances (optional). Example:\n" +
 		"# gitlab_hosts:\n" +
 		"#   git.example.com:\n" +
@@ -163,6 +177,7 @@ func defaults() *Config {
 		BinDir:    defaultBinDir(),
 		UserAgent: "wpkget",
 		PassCmd:   defaultPassCmd(),
+		Progress:  progress.Auto,
 	}
 }
 

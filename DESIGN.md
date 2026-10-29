@@ -27,6 +27,8 @@ wpkget/
 │       │   └── packages.go      # local package list (read/write YAML)
 │       ├── config/
 │       │   └── config.go        # config file loading and defaults
+│       ├── progress/
+│       │   └── progress.go      # stdlib-only download progress bar
 │       └── zipdown/
 │           └── zipdown.go       # zipdown service client
 └── go.mod
@@ -140,6 +142,14 @@ No third-party decompression library is used. The standard library covers all fo
 
 **`--all` mode:** When the `all` flag is set (stored per-entry in `packages.yaml`), the entire archive contents are copied to `bin_dir` instead of extracting a single binary. If the archive has a single top-level directory it is unwrapped first, so the files land directly in `bin_dir`. This handles tools like neovim that ship a full directory tree.
 
+**Timeouts:** the download client has no overall `Timeout`, because in Go it also covers reading the body and would abort large files over slow links or behind proxies that buffer the whole file (observed: 85 s before the first byte for a 104 MiB asset). Instead `downloadURL` uses a request context cancelled by a timer: `downloadHeaderTimeout` (10 min) until the headers arrive, then `downloadIdleTimeout` (2 min) re-armed on every successful read by `idleReader`. GitLab clients are copied with `Timeout = 0` for the same reason; their 120 s timeout still applies to API calls. The two values are package variables so tests can shorten them.
+
+**Integrity check:** `verifyDownload` compares the file on disk with the `size` and `digest` (`sha256:<hex>`) fields of the GitHub release asset JSON, skipping any value that is absent. It runs only for direct downloads: zipdown returns a re-packaged zip whose bytes differ from the published asset, and GitLab release links carry neither field. It is not a signature check: it detects truncation and modification in transit (e.g. a proxy trickling or rewriting the body) but a compromised release would publish a matching size and digest. The `digest` field is a relatively recent GitHub addition; wpkget does not depend on it being present.
+
+**Download feedback:** with the progress writer enabled, `downloadURL` prints `downloading <asset> from <host>` and runs `progress.StartWait` (a one-second ticker on stderr) until `client.Do` returns, then hands over to the bar.
+
+**Progress bar:** `internal/progress` wraps the response body in an `io.Reader` that counts bytes and rewrites one stderr line with `\r` (at most every 100 ms, plus a final summary line). The total comes from `Content-Length`; when it is missing only counters are shown. It uses no dependency: ASCII bar, fixed line width (asset name shortened from the middle), no ANSI colors, because the terminal width cannot be queried without `golang.org/x/term` and ANSI is not portable across Windows consoles. Mode is `progress` in the config or `--progress`, with `auto` meaning "stderr is a character device". That check does not recognize mintty (Git Bash), where `always` is needed. Auto mode is also disabled by `--verbose`/`--debug`/`--debug-http`, since those logs share stderr. `install.Options.Progress` is the `io.Writer` to draw on (nil disables); zipdown downloads (`Wrap`) are not instrumented. If a download aborts, `Close` ends the line so later logs do not overwrite the bar.
+
 **Move vs. copy:** `os.Rename` is attempted first (atomic on the same volume). If it fails (cross-volume), the tool falls back to copy + delete. This avoids a partial binary at the destination during the move.
 
 ---
@@ -207,6 +217,7 @@ Missing config file is not an error; defaults are used. When the default path is
 | `zipdown_url` | `""` | zipdown service URL; empty disables the feature |
 | `zipdown_token` | `""` | Bearer token for the zipdown service |
 | `user_agent` | `""` | Custom User-Agent for all HTTP requests |
+| `progress` | `auto` | Download progress bar: `auto`, `always` or `never` (see "Progress bar" under the install pipeline) |
 | `gitlab_hosts` | `{}` | Self-hosted GitLab instances, keyed by host (see [GitLab](#gitlab)) |
 | `pass_cmd` | `winpass` on Windows, `pass` elsewhere | pass-compatible binary used for `token_pass` lookups |
 

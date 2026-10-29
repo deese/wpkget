@@ -70,3 +70,17 @@ func TestSplitCommand(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadProgress(t *testing.T) {
+	cfg, err := Load(writeTemp(t, ""))
+	if err != nil || cfg.Progress != "auto" {
+		t.Fatalf("default progress = %q, err %v", cfg.Progress, err)
+	}
+	cfg, err = Load(writeTemp(t, "progress: never\n"))
+	if err != nil || cfg.Progress != "never" {
+		t.Fatalf("progress = %q, err %v", cfg.Progress, err)
+	}
+	if _, err := Load(writeTemp(t, "progress: sometimes\n")); err == nil {
+		t.Fatal("invalid progress value must be rejected")
+	}
+}

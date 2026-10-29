@@ -18,6 +18,7 @@ import (
 	"github.com/deese/wpkget/src/internal/gitlab"
 	"github.com/deese/wpkget/src/internal/install"
 	"github.com/deese/wpkget/src/internal/packages"
+	"github.com/deese/wpkget/src/internal/progress"
 	"github.com/deese/wpkget/src/internal/zipdown"
 )
 
@@ -41,6 +42,7 @@ type globals struct {
 	verbose    bool
 	debug      bool
 	debugHTTP  bool
+	progress   string
 }
 
 // registerGlobals binds global flags to g on the given FlagSet.
@@ -52,6 +54,7 @@ func registerGlobals(fs *flag.FlagSet, g *globals) {
 	fs.BoolVar(&g.verbose, "verbose", false, "enable verbose output")
 	fs.BoolVar(&g.debug, "debug", false, "print step-by-step diagnostic output")
 	fs.BoolVar(&g.debugHTTP, "debug-http", false, "dump outgoing HTTP requests and response bodies")
+	fs.StringVar(&g.progress, "progress", "", "download progress bar: auto (default), always or never")
 }
 
 // parseInterspersed calls fs.Parse repeatedly, collecting positional arguments
@@ -82,6 +85,12 @@ func setup(g *globals) (*config.Config, *packages.List, *zipdown.Client) {
 	if g.userAgent != "" {
 		cfg.UserAgent = g.userAgent
 	}
+	if g.progress != "" {
+		if !progress.ValidMode(g.progress) {
+			log.Fatalf("invalid --progress %q (want auto, always or never)", g.progress)
+		}
+		cfg.Progress = g.progress
+	}
 	gitlab.Configure(cfg)
 	zd := zipdown.New(cfg.ZipdownURL, cfg.ZipdownToken, cfg.UserAgent)
 	zd.SetDebugHTTP(g.debugHTTP)
@@ -90,6 +99,19 @@ func setup(g *globals) (*config.Config, *packages.List, *zipdown.Client) {
 		log.Fatalf("load package list: %v", err)
 	}
 	return cfg, pkgList, zd
+}
+
+// progressOut returns where to draw the download progress bar, or nil when it
+// is disabled. In auto mode it stays off while verbose/debug output is
+// enabled, because those logs share stderr with the bar.
+func progressOut(cfg *config.Config, g *globals) io.Writer {
+	if cfg.Progress == progress.Auto && (g.verbose || g.debug || g.debugHTTP) {
+		return nil
+	}
+	if progress.Enabled(cfg.Progress, os.Stderr) {
+		return os.Stderr
+	}
+	return nil
 }
 
 func main() {
@@ -304,6 +326,7 @@ func handleInstall(repos []string, binaryName, binDir, match string, all bool, f
 			Debug:      g.debug,
 			DebugHTTP:  g.debugHTTP,
 			UserAgent:  cfg.UserAgent,
+			Progress:   progressOut(cfg, g),
 			Zipdown:    zd,
 		})
 		if err != nil {
@@ -387,6 +410,7 @@ func handleUpdate(repos []string, cfg *config.Config, pkgList *packages.List, zd
 			Debug:      g.debug,
 			DebugHTTP:  g.debugHTTP,
 			UserAgent:  cfg.UserAgent,
+			Progress:   progressOut(cfg, g),
 			Zipdown:    zd,
 		})
 		if err != nil {
@@ -756,6 +780,7 @@ Flags (accepted anywhere on the command line):
   --verbose            enable verbose output
   --debug              print step-by-step diagnostic output
   --debug-http         dump outgoing HTTP requests and response bodies
+  --progress  <mode>   download progress bar: auto (default), always, never
 
 Exit codes:
   0  success

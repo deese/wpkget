@@ -22,6 +22,8 @@ type Release struct {
 type Asset struct {
 	Name               string `json:"name"`
 	BrowserDownloadURL string `json:"browser_download_url"`
+	Size               int64  `json:"size"`   // bytes; 0 when the provider does not report it
+	Digest             string `json:"digest"` // e.g. "sha256:<hex>"; empty when not reported
 }
 
 var httpClient = &http.Client{Timeout: 30 * time.Second}
