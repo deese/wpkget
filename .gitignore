@@ -2,7 +2,7 @@
 *.exe
 *.exe~
 dist/
-wpkget
+/wpkget
 
 # Go
 /vendor/
