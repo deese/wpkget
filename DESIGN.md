@@ -2,7 +2,7 @@
 
 ## Purpose
 
-wpkget is a single-binary Windows CLI tool that automates the download and installation of compiled binaries distributed as GitHub release assets. It is intentionally narrow in scope: it does not manage PATH, does not handle version pinning beyond "track latest", and does not install MSI/NSIS installers.
+wpkget is a single-binary Windows CLI tool that automates the download and installation of compiled binaries distributed as GitHub or GitLab release assets (gitlab.com and self-hosted GitLab). It is intentionally narrow in scope: it does not manage PATH, does not handle version pinning beyond "track latest", and does not install MSI/NSIS installers.
 
 ---
 
@@ -17,6 +17,8 @@ wpkget/
 │   └── internal/
 │       ├── github/
 │       │   └── github.go        # GitHub Releases API client
+│       ├── gitlab/
+│       │   └── gitlab.go        # GitLab Releases API client, per-host token/TLS
 │       ├── asset/
 │       │   └── asset.go         # asset selection heuristics
 │       ├── install/
@@ -38,7 +40,9 @@ All packages under `internal/` are unexported to keep the public surface minimal
 
 The entry point uses the standard `flag` package with subcommand dispatch. No third-party CLI framework is used — the command set is small enough that the standard library suffices and avoids dependency bloat.
 
-Subcommands: `install`, `update`, `check`, `list`, `remove`, `url`.
+Subcommands: `install`, `update`, `check`, `list`, `remove`, `url`, `show`.
+
+`install`, `url` and `show` accept `--provider github|gitlab` (default `github`). A repo argument may also be a full URL, in which case the provider (and, for GitLab, the host) is derived from it; see [GitLab](#gitlab).
 
 Global flags (`--config`, `--bin-dir`, `--user-agent`, `--dry-run`, `--verbose`, `--debug`, `--debug-http`) are parsed before the subcommand is dispatched.
 
@@ -57,6 +61,36 @@ The response is decoded into a minimal struct containing only the fields we need
 **Authentication:** The GitHub API allows 60 unauthenticated requests per hour per IP. wpkget does not require a token but will read one from the `GITHUB_TOKEN` environment variable and attach it as a `Bearer` header when present. This raises the limit to 5 000 requests/hour and avoids rate-limit errors in CI or heavy-use scenarios.
 
 **HTTP client:** `net/http` default client with a 30-second timeout. No retries — a failed network call surfaces as a clear error; the user can re-run.
+
+---
+
+## GitLab
+
+`internal/gitlab` exposes the same `github.Release` shape as the GitHub client, so asset selection and the install pipeline are provider-agnostic. The provider is chosen in `install.latestRelease`.
+
+Endpoint used (the first item is the newest release):
+
+```
+GET https://{host}{prefix}/api/v4/projects/{url-escaped group/subgroup/project}/releases?per_page=1
+```
+
+Assets are the release's `assets.links` (name + URL). Source archives are ignored. Nested subgroups are supported; the repo base name is the last path segment.
+
+**Host allow-list.** Hosts are never inferred from user input. A URL argument is accepted only for `github.com`, `gitlab.com`, or a host listed in `gitlab_hosts`; anything else is rejected. This is the control that prevents sending a token to an arbitrary server. A self-hosted entry is stored in `packages.yaml` as `host`, so `update`/`check`/`list` return to the same instance (`host` is omitted for gitlab.com).
+
+**Per-host settings** (`gitlab_hosts.<host>` in the config):
+
+| Field | Description |
+|-------|-------------|
+| `prefix` | URL path under which GitLab is served (e.g. `/gitlab`). Stripped from URL arguments and prepended to the API URL. The key stays the bare host, so two instances on one host with different prefixes are not supported. |
+| `token_env` | Environment variable holding the token. Checked first. |
+| `token_pass` | pass-compatible entry. Runs `<pass_cmd> show <entry>` (no shell; stdin/stderr inherited for passphrase prompts) and uses the first line. `pass_cmd` defaults to `winpass` on Windows and `pass` elsewhere. Entries starting with `-` are rejected. |
+| `ca_file` | PEM bundle added to the system roots. `$VAR`/`${VAR}` are expanded; when empty, `WPKGET_CA_FILE` is used. |
+| `skip_verify` | Disables certificate verification for that host and logs a warning. Explicit opt-in; `ca_file` is the recommended option. |
+
+**Token handling.** Sessions (HTTP client + token) are resolved lazily and cached per host. The token is sent as `PRIVATE-TOKEN` only to the host it belongs to: `gitlab.Prepare` attaches it to API calls and to asset downloads whose URL host is known, and the client's `CheckRedirect` removes the header when a redirect leaves the original host (e.g. an object storage backend), because Go would otherwise copy custom headers across hosts. Unconfigured hosts never receive credentials. For gitlab.com the `GITLAB_TOKEN` variable is used; it is never sent to self-hosted instances.
+
+**Limitations.** HTTPS only; no `http://` instances. The zipdown service receives the asset URL without credentials, so bare `.exe` assets of private GitLab projects cannot be wrapped. Tracked packages are keyed by `repo`, so the same `group/project` on two hosts collides.
 
 ---
 
@@ -144,6 +178,8 @@ Schema:
 ```yaml
 packages:
   - repo: owner/name
+    provider: gitlab           # optional: "github" (default) or "gitlab"
+    host: git.example.com      # optional: self-hosted GitLab host (omitted for gitlab.com)
     version: "v1.2.3"
     binary_name: custom-name   # optional: installed .exe name (without extension)
     match: "*windows-amd64*"   # optional: glob used for asset selection
@@ -169,6 +205,8 @@ Missing config file is not an error; defaults are used. When the default path is
 | `zipdown_url` | `""` | zipdown service URL; empty disables the feature |
 | `zipdown_token` | `""` | Bearer token for the zipdown service |
 | `user_agent` | `""` | Custom User-Agent for all HTTP requests |
+| `gitlab_hosts` | `{}` | Self-hosted GitLab instances, keyed by host (see [GitLab](#gitlab)) |
+| `pass_cmd` | `winpass` / `pass` | pass-compatible binary used for `token_pass` lookups |
 
 `--bin-dir` and `--user-agent` CLI flags override the corresponding config fields for the duration of the run.
 
@@ -191,7 +229,7 @@ Missing config file is not an error; defaults are used. When the default path is
 
 Everything else — HTTP client, archive handling, file I/O, flag parsing — uses the Go standard library.
 
-**No GUI, no shell-out, no CGO.** The binary must cross-compile cleanly with `GOOS=windows GOARCH=amd64`.
+**No GUI, no CGO, no shell.** The only external process ever started is the configured `pass_cmd`, and only when a `token_pass` entry is used; it is executed directly with fixed arguments, never through a shell. The binary must cross-compile cleanly with `GOOS=windows GOARCH=amd64`.
 
 ---
 
