@@ -1,6 +1,7 @@
 BINARY     := wpkget
 CMD        := ./src/cmd/wpkget
-LDFLAGS    := -s -w
+VERSION    := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+LDFLAGS    := -s -w -X main.version=$(VERSION)
 
 ifeq ($(OS),Windows_NT)
   OUT := $(BINARY).exe

@@ -22,7 +22,7 @@ import (
 )
 
 // version is overridden at build time via -ldflags "-X main.version=vX.Y".
-var version = "v1.3.7"
+var version = "dev"
 
 // Exit codes.
 const (
@@ -703,10 +703,11 @@ func mapError(err error) int {
 	return exitGeneral
 }
 
-// pkgListFile returns the path to packages.yaml, inferred from the config path.
+// pkgListFile returns the path to packages.yaml, which lives next to the
+// effective config file (--config, then WPKGET_CONFIG, then the default).
 func pkgListFile(cfgPath string) string {
-	if cfgPath != "" {
-		return filepath.Join(filepath.Dir(cfgPath), "packages.yaml")
+	if p := config.Path(cfgPath); p != "" {
+		return filepath.Join(filepath.Dir(p), "packages.yaml")
 	}
 	return filepath.Join(config.DefaultDir(), "packages.yaml")
 }

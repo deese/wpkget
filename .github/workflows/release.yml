@@ -47,7 +47,7 @@ jobs:
         run: |
           EXT=""
           [ "${{ matrix.goos }}" = "windows" ] && EXT=".exe"
-          go build -ldflags="-s -w" \
+          go build -ldflags="-s -w -X main.version=${{ github.ref_name }}" \
             -o wpkget_${{ matrix.goos }}_${{ matrix.goarch }}${EXT} \
             ./src/cmd/wpkget/
 
