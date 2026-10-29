@@ -552,9 +552,13 @@ func handleShow(repos []string, flagProvider string, pkgList *packages.List, cfg
 
 		fmt.Printf("repo:     %s\n", spec.repo)
 		fmt.Printf("provider: %s\n", spec.provider)
+		if spec.host != "" {
+			fmt.Printf("host:     %s\n", spec.host)
+		}
 		fmt.Printf("latest:   %s\n", release.TagName)
 
-		if entry := pkgList.Get(spec.repo); entry != nil {
+		// An entry with the same repo path on a different host is not this package.
+		if entry := pkgList.Get(spec.repo); entry != nil && entry.Host == spec.host {
 			fmt.Printf("tracked: %s", entry.Version)
 			if entry.Version == release.TagName {
 				fmt.Print(" (up to date)")
