@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 
 	"gopkg.in/yaml.v3"
 )
@@ -161,7 +162,36 @@ func defaults() *Config {
 	return &Config{
 		BinDir:    defaultBinDir(),
 		UserAgent: "wpkget",
+		PassCmd:   defaultPassCmd(),
 	}
+}
+
+// defaultPassCmd returns the pass-compatible binary for the platform.
+func defaultPassCmd() string {
+	if runtime.GOOS == "windows" {
+		return "winpass"
+	}
+	return "pass"
+}
+
+// Path returns the effective config file path for the given --config value
+// (flag, then WPKGET_CONFIG, then the platform default). It is empty when no
+// location can be determined.
+func Path(flag string) string {
+	p, _ := resolvePath(flag)
+	return p
+}
+
+// Ensure creates the config file at path with default values if it does not exist.
+func Ensure(path string) error {
+	_, err := os.Stat(path)
+	if err == nil {
+		return nil
+	}
+	if !os.IsNotExist(err) {
+		return fmt.Errorf("config: stat %s: %w", path, err)
+	}
+	return writeDefaults(path, defaults())
 }
 
 // defaultBinDir returns the platform-appropriate default binary directory.

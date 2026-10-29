@@ -115,3 +115,15 @@ func (l *List) Save() error {
 
 	return nil
 }
+
+// EnsureFile creates an empty package list at path if it does not exist.
+func EnsureFile(path string) error {
+	_, err := os.Stat(path)
+	if err == nil {
+		return nil
+	}
+	if !os.IsNotExist(err) {
+		return fmt.Errorf("packages: stat %s: %w", path, err)
+	}
+	return (&List{path: path}).Save()
+}

@@ -144,6 +144,8 @@ func main() {
 		os.Exit(runRemove(rest))
 	case "url":
 		os.Exit(runURL(rest))
+	case "config":
+		os.Exit(runConfig(rest))
 	case "show":
 		os.Exit(runShow(rest))
 	case "version", "--version", "-version":
@@ -185,9 +187,9 @@ func runUpdate(args []string) int {
 	fs := flag.NewFlagSet("update", flag.ExitOnError)
 	fs.Usage = usage
 	registerGlobals(fs, &g)
-	parseInterspersed(fs, args)
+	repos := parseInterspersed(fs, args)
 	cfg, pkgList, zd := setup(&g)
-	return handleUpdate(cfg, pkgList, zd, &g)
+	return handleUpdate(repos, cfg, pkgList, zd, &g)
 }
 
 // runCheck parses global flags and delegates to handleCheck.
@@ -324,14 +326,29 @@ func handleInstall(repos []string, binaryName, binDir, match string, all bool, f
 }
 
 // handleUpdate checks all tracked packages for new releases and installs them.
-func handleUpdate(cfg *config.Config, pkgList *packages.List, zd *zipdown.Client, g *globals) int {
+// When repos is non-empty only those tracked packages are considered.
+func handleUpdate(repos []string, cfg *config.Config, pkgList *packages.List, zd *zipdown.Client, g *globals) int {
 	if len(pkgList.Packages) == 0 {
 		fmt.Println("no packages tracked")
 		return exitOK
 	}
 
 	code := exitOK
-	for _, entry := range pkgList.Packages {
+	targets := pkgList.Packages
+	if len(repos) > 0 {
+		targets = nil
+		for _, arg := range repos {
+			entry, err := findTracked(pkgList, arg)
+			if err != nil {
+				log.Printf("update %s: %v", arg, err)
+				code = exitGeneral
+				continue
+			}
+			targets = append(targets, *entry)
+		}
+	}
+
+	for _, entry := range targets {
 		if entry.KeepVersion {
 			fmt.Printf("%s is pinned, skipping\n", entry.Repo)
 			continue
@@ -389,6 +406,23 @@ func handleUpdate(cfg *config.Config, pkgList *packages.List, zd *zipdown.Client
 		}
 	}
 	return code
+}
+
+// findTracked returns the tracked entry for a repo argument. A plain
+// "owner/repo" matches on the repo path alone; a URL must also match the host.
+func findTracked(pkgList *packages.List, arg string) (*packages.Entry, error) {
+	spec, err := parseRepoArg(arg, "")
+	if err != nil {
+		return nil, err
+	}
+	isURL := strings.HasPrefix(arg, "https://") || strings.HasPrefix(arg, "http://")
+	for i := range pkgList.Packages {
+		e := &pkgList.Packages[i]
+		if e.Repo == spec.repo && (!isURL || e.Host == spec.host) {
+			return e, nil
+		}
+	}
+	return nil, fmt.Errorf("not tracked (use install to add it)")
 }
 
 // handleList prints all tracked packages.
@@ -690,7 +724,7 @@ Commands:
                                (e.g. --match "*windows-amd64*.zip")
            [--all]             copy all archive contents (files + folders) to bin-dir
            [--bin-dir <path>]  destination directory for this package (saved per-package)
-  update                       check all tracked packages for new releases
+  update  [<repo> ...]         update all tracked packages, or only the given ones
   list    [-v]                 list tracked packages and their versions
                                -v: include resolved download URL
   check                        show latest available version for each tracked package
@@ -699,12 +733,18 @@ Commands:
            [--provider/-p <p>] source provider: github (default) or gitlab
   show    <user/repo> [...]    show package details and all available release assets
            [--provider/-p <p>] source provider: github (default) or gitlab
+  config  <sub>                manage the config file
+           open [packages]     open the file in $VISUAL/$EDITOR or the OS default app
+           path [packages]     print the file path
+           check               validate syntax (unknown keys) and GitLab hosts (CA, token)
+           show                print the loaded config with secrets masked
   version                      print version and exit
 
 Repo argument formats:
   owner/repo                          GitHub (default)
   https://github.com/owner/repo       GitHub (explicit URL)
-  https://gitlab.com/owner/repo[/...] GitLab (auto-detected from URL)
+  https://gitlab.com/group/repo[/...] GitLab (auto-detected from URL)
+  https://<host>/group/repo           self-hosted GitLab (host must be in gitlab_hosts)
   owner/repo --provider gitlab        GitLab (explicit flag)
 
 Flags (accepted anywhere on the command line):

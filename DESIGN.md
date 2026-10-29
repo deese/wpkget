@@ -40,7 +40,9 @@ All packages under `internal/` are unexported to keep the public surface minimal
 
 The entry point uses the standard `flag` package with subcommand dispatch. No third-party CLI framework is used — the command set is small enough that the standard library suffices and avoids dependency bloat.
 
-Subcommands: `install`, `update`, `check`, `list`, `remove`, `url`, `show`.
+Subcommands: `install`, `update`, `check`, `list`, `remove`, `url`, `show`, `config`.
+
+`config` has its own sub-subcommands (`open`, `path`, `check`, `show`; see [Configuration](#configuration)), implemented in `cmd/wpkget/config_cmd.go`.
 
 `install`, `url` and `show` accept `--provider github|gitlab` (default `github`). A repo argument may also be a full URL, in which case the provider (and, for GitLab, the host) is derived from it; see [GitLab](#gitlab).
 
@@ -206,9 +208,18 @@ Missing config file is not an error; defaults are used. When the default path is
 | `zipdown_token` | `""` | Bearer token for the zipdown service |
 | `user_agent` | `""` | Custom User-Agent for all HTTP requests |
 | `gitlab_hosts` | `{}` | Self-hosted GitLab instances, keyed by host (see [GitLab](#gitlab)) |
-| `pass_cmd` | `winpass` / `pass` | pass-compatible binary used for `token_pass` lookups |
+| `pass_cmd` | `winpass` on Windows, `pass` elsewhere | pass-compatible binary used for `token_pass` lookups |
 
 `--bin-dir` and `--user-agent` CLI flags override the corresponding config fields for the duration of the run.
+
+### `config` subcommands
+
+- **`open [packages]`** — ensures the file exists (config: written with defaults; packages: empty list), then opens it. The editor is `$VISUAL`, then `$EDITOR`, on all platforms; otherwise the OS handler (`rundll32 url.dll,FileProtocolHandler` on Windows, `open` on macOS, `xdg-open` elsewhere). The command line is split by a small quote-aware splitter (backslashes are literal so Windows paths work) and executed directly, never through a shell. The process is waited for so terminal editors work. Honoring `$EDITOR` on Windows is deliberate: users of Git Bash or other POSIX tooling usually already have it set.
+- **`path [packages]`** — prints the effective path (`--config`, then `WPKGET_CONFIG`, then the platform default). The packages file is located with the same logic the other commands use, i.e. next to the `--config` path or in the default directory; note that this does not follow `WPKGET_CONFIG`.
+- **`check`** — decodes the file with `yaml.Decoder.KnownFields(true)`, because the normal loader ignores unknown keys and a typo would otherwise fail silently. It then builds the session of each GitLab host (`gitlab.Check`) without any network access: CA bundle parsing and token lookup, including `pass_cmd`. Token values are only reported as found / not found. A missing file is not an error and is never created.
+- **`show`** — loads the config through the regular loader and prints it as YAML with secrets masked. It reflects the file over defaults, not the per-run CLI overrides.
+
+There is intentionally no `config set`: rewriting the file through `yaml.v3` drops the comments that document the generated default file.
 
 ---
 
@@ -229,7 +240,7 @@ Missing config file is not an error; defaults are used. When the default path is
 
 Everything else — HTTP client, archive handling, file I/O, flag parsing — uses the Go standard library.
 
-**No GUI, no CGO, no shell.** The only external process ever started is the configured `pass_cmd`, and only when a `token_pass` entry is used; it is executed directly with fixed arguments, never through a shell. The binary must cross-compile cleanly with `GOOS=windows GOARCH=amd64`.
+**No GUI, no CGO, no shell.** External processes are started in only two cases: the configured `pass_cmd` when a `token_pass` entry is used, and the editor / OS file handler for `config open`. Both are executed directly with an argument vector, never through a shell. The binary must cross-compile cleanly with `GOOS=windows GOARCH=amd64`.
 
 ---
 

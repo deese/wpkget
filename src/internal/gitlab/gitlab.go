@@ -12,7 +12,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -61,12 +61,6 @@ func Configure(cfg *config.Config) {
 		hosts[strings.ToLower(h)] = hc
 	}
 	passCmd = cfg.PassCmd
-	if passCmd == "" {
-		passCmd = "pass"
-		if runtime.GOOS == "windows" {
-			passCmd = "winpass"
-		}
-	}
 	sessions = map[string]*session{}
 }
 
@@ -297,4 +291,35 @@ func TrimPrefix(host, path string) string {
 		return path
 	}
 	return strings.TrimPrefix(path, p+"/")
+}
+
+// HostStatus is the outcome of checking one configured host.
+type HostStatus struct {
+	Host     string
+	HasToken bool
+	Err      error // CA file or token lookup failure
+}
+
+// Check builds the session (CA bundle and token) of every configured host
+// without contacting it, and reports what would fail. Token values are never
+// exposed.
+func Check(cfg *config.Config) []HostStatus {
+	Configure(cfg)
+
+	names := make([]string, 0, len(hosts))
+	for h := range hosts {
+		names = append(names, h)
+	}
+	sort.Strings(names)
+
+	statuses := make([]HostStatus, 0, len(names))
+	for _, h := range names {
+		s, err := sessionFor(h)
+		st := HostStatus{Host: h, Err: err}
+		if err == nil {
+			st.HasToken = s.token != ""
+		}
+		statuses = append(statuses, st)
+	}
+	return statuses
 }

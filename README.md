@@ -151,10 +151,12 @@ assets (12):
 Check all tracked packages for new releases.
 
 ```
-wpkget update
+wpkget update [<repo> ...]
 ```
 
 If a newer version is found the full install process runs automatically (download, decompress, move, delete).
+
+Pass one or more repos to update only those. They must already be tracked (a plain `owner/repo` or a full URL; a URL must also match the tracked host). Untracked repos are reported and the exit code is 1; pinned packages (`keep_version`) are still skipped.
 
 ### Check for available updates (without installing)
 
@@ -172,6 +174,23 @@ wpkget list [-v]
 
 Output shows each tracked package and its currently installed version.
 Pass `-v` to also show the resolved download URL.
+
+### Manage the config file
+
+```
+wpkget config open [packages]   open the file for editing
+wpkget config path [packages]   print the file path
+wpkget config check             validate the config
+wpkget config show              print the loaded config
+```
+
+`open` launches `$VISUAL`, then `$EDITOR` (arguments and double quotes are supported, e.g. `EDITOR="code -w"`), on every platform. When neither is set it falls back to the OS default handler (the file association on Windows, `open` on macOS, `xdg-open` on Linux). The file is created with defaults if it does not exist yet. GUI editors that return immediately (such as `code` without `-w`) are fine: wpkget just waits for the process to exit.
+
+The optional `packages` argument of `open` and `path` targets `packages.yaml` instead of `config.yaml`.
+
+`check` parses the config in strict mode, so a misspelled key (e.g. `gitlab_host`) is reported instead of being silently ignored, and then verifies every `gitlab_hosts` entry offline: the `ca_file` must be a readable PEM bundle and a configured `token_pass` entry must be retrievable (this runs `pass_cmd`, which may prompt for a passphrase). Token values are never printed. It exits with code 1 if anything is wrong, and does not create the config file if it is missing.
+
+`show` prints the config as loaded (file values over defaults) with `zipdown_token` masked. It does not apply `--bin-dir` or `--user-agent` overrides.
 
 ### Remove a package from tracking
 
