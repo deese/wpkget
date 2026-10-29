@@ -29,7 +29,14 @@ var allowedExts = []string{".zip", ".tar.gz", ".gz", ".exe"}
 // If multiple candidates remain after all filters, the first is used and a
 // warning is printed. If none remain, ErrNoAsset is returned.
 func Select(assets []github.Asset, repoName string, match string, verbose bool) (*github.Asset, error) {
+	trace := func(format string, args ...any) {
+		if verbose {
+			log.Printf("asset: "+format, args...)
+		}
+	}
+
 	candidates := filterByExt(assets)
+	trace("%d total, %d with a supported extension", len(assets), len(candidates))
 	if len(candidates) == 0 {
 		return nil, fmt.Errorf("%w in %d total assets", ErrNoAsset, len(assets))
 	}
@@ -43,25 +50,31 @@ func Select(assets []github.Asset, repoName string, match string, verbose bool) 
 			return nil, fmt.Errorf("%w: no asset matched pattern %q", ErrNoAsset, match)
 		}
 		candidates = filtered
+		trace("match %q → %d", match, len(candidates))
 	} else {
 		goos := runtime.GOOS
 		goarch := runtime.GOARCH
 		if osMatch := filterByOSPositive(candidates, goos); len(osMatch) > 0 {
 			candidates = osMatch
+			trace("os %s → %d", goos, len(candidates))
 		} else if noOther := filterByExcludingOtherPlatforms(candidates, goos); len(noOther) > 0 {
 			candidates = noOther
+			trace("no %s-named asset, excluding other platforms → %d", goos, len(candidates))
 		}
 		if arch := filterByArch(candidates, goarch); len(arch) > 0 {
 			candidates = arch
+			trace("arch %s → %d", goarch, len(candidates))
 		}
 		// Prefer glibc over musl when both are available.
 		if noMusl := filterByExcludingMusl(candidates); len(noMusl) > 0 {
 			candidates = noMusl
+			trace("excluding musl → %d", len(candidates))
 		}
 		// On Windows prefer .zip/.exe over .tar.gz when both survive.
 		if goos == "windows" {
 			if preferredExts := filterByPreferredWindowsExt(candidates); len(preferredExts) > 0 {
 				candidates = preferredExts
+				trace("preferring .zip/.exe → %d", len(candidates))
 			}
 		}
 	}
@@ -75,6 +88,7 @@ func Select(assets []github.Asset, repoName string, match string, verbose bool) 
 			candidates[0].Name, strings.Join(names[1:], ", "))
 	}
 
+	trace("selected %s", candidates[0].Name)
 	return &candidates[0], nil
 }
 

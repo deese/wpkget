@@ -73,9 +73,15 @@ func Run(opts Options) (*Result, error) {
 	}
 
 	repoName := repoBaseName(opts.Repo)
+	if opts.Verbose {
+		log.Printf("release: %s %s (%s)", opts.Repo, release.TagName, sourceLabel(opts.Provider, opts.Host))
+	}
 	chosen, err := asset.Select(release.Assets, repoName, opts.Match, opts.Verbose)
 	if err != nil {
 		return nil, err
+	}
+	if opts.Verbose {
+		log.Printf("asset: url %s", chosen.BrowserDownloadURL)
 	}
 
 	destName := resolveDestName(opts.BinaryName, repoName)
@@ -143,11 +149,18 @@ func Run(opts Options) (*Result, error) {
 		}
 	}
 
-	if opts.Verbose {
-		log.Printf("installed %s %s → %s", opts.Repo, release.TagName, dest)
-	}
-
 	return &Result{Version: release.TagName, BinaryPath: dest}, nil
+}
+
+// sourceLabel describes where a release comes from, e.g. "github" or "gitlab git.example.com".
+func sourceLabel(provider, host string) string {
+	if provider == "" {
+		provider = "github"
+	}
+	if host != "" {
+		return provider + " " + host
+	}
+	return provider
 }
 
 // ResolveURL returns the download URL for the latest release asset
