@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/deese/wpkget/src/internal/asset"
 	"github.com/deese/wpkget/src/internal/config"
 	"github.com/deese/wpkget/src/internal/github"
+	"github.com/deese/wpkget/src/internal/gitlab"
 	"github.com/deese/wpkget/src/internal/install"
 	"github.com/deese/wpkget/src/internal/packages"
 	"github.com/deese/wpkget/src/internal/zipdown"
@@ -80,6 +82,7 @@ func setup(g *globals) (*config.Config, *packages.List, *zipdown.Client) {
 	if g.userAgent != "" {
 		cfg.UserAgent = g.userAgent
 	}
+	gitlab.Configure(cfg)
 	zd := zipdown.New(cfg.ZipdownURL, cfg.ZipdownToken, cfg.UserAgent)
 	zd.SetDebugHTTP(g.debugHTTP)
 	pkgList, err := packages.Load(pkgListFile(g.configPath))
@@ -160,6 +163,7 @@ func runInstall(args []string) int {
 		binaryName string
 		match      string
 		all        bool
+		provider   string
 	)
 	fs := flag.NewFlagSet("install", flag.ExitOnError)
 	fs.Usage = usage
@@ -167,10 +171,12 @@ func runInstall(args []string) int {
 	fs.StringVar(&binaryName, "name", "", "rename the installed binary (single repo only)")
 	fs.StringVar(&match, "match", "", "glob pattern to select the release asset")
 	fs.BoolVar(&all, "all", false, "copy all archive contents to bin-dir")
+	fs.StringVar(&provider, "provider", "", "source provider: github (default) or gitlab")
+	fs.StringVar(&provider, "p", "", "shorthand for --provider")
 
 	repos := parseInterspersed(fs, args)
 	cfg, pkgList, zd := setup(&g)
-	return handleInstall(repos, binaryName, g.binDir, match, all, cfg, pkgList, zd, &g)
+	return handleInstall(repos, binaryName, g.binDir, match, all, provider, cfg, pkgList, zd, &g)
 }
 
 // runUpdate parses global flags and delegates to handleUpdate.
@@ -223,28 +229,38 @@ func runRemove(args []string) int {
 
 // runURL parses global flags and delegates to handleURL.
 func runURL(args []string) int {
-	var g globals
+	var (
+		g        globals
+		provider string
+	)
 	fs := flag.NewFlagSet("url", flag.ExitOnError)
 	fs.Usage = usage
 	registerGlobals(fs, &g)
+	fs.StringVar(&provider, "provider", "", "source provider: github (default) or gitlab")
+	fs.StringVar(&provider, "p", "", "shorthand for --provider")
 	repos := parseInterspersed(fs, args)
 	cfg, _, _ := setup(&g)
-	return handleURL(repos, cfg, &g)
+	return handleURL(repos, provider, cfg, &g)
 }
 
 // runShow parses global flags and delegates to handleShow.
 func runShow(args []string) int {
-	var g globals
+	var (
+		g        globals
+		provider string
+	)
 	fs := flag.NewFlagSet("show", flag.ExitOnError)
 	fs.Usage = usage
 	registerGlobals(fs, &g)
+	fs.StringVar(&provider, "provider", "", "source provider: github (default) or gitlab")
+	fs.StringVar(&provider, "p", "", "shorthand for --provider")
 	repos := parseInterspersed(fs, args)
 	cfg, pkgList, _ := setup(&g)
-	return handleShow(repos, pkgList, cfg, &g)
+	return handleShow(repos, provider, pkgList, cfg, &g)
 }
 
 // handleInstall downloads and installs the latest release for each given repo.
-func handleInstall(repos []string, binaryName, binDir, match string, all bool, cfg *config.Config, pkgList *packages.List, zd *zipdown.Client, g *globals) int {
+func handleInstall(repos []string, binaryName, binDir, match string, all bool, flagProvider string, cfg *config.Config, pkgList *packages.List, zd *zipdown.Client, g *globals) int {
 	if len(repos) == 0 {
 		log.Print("install: missing <user/repo> argument")
 		return exitGeneral
@@ -260,15 +276,23 @@ func handleInstall(repos []string, binaryName, binDir, match string, all bool, c
 	}
 
 	code := exitOK
-	for _, repo := range repos {
-		if err := validateRepo(repo); err != nil {
-			log.Printf("install %s: %v", repo, err)
+	for _, rawArg := range repos {
+		spec, err := parseRepoArg(rawArg, flagProvider)
+		if err != nil {
+			log.Printf("install %s: %v", rawArg, err)
+			code = exitGeneral
+			continue
+		}
+		if err := validateRepo(spec.repo); err != nil {
+			log.Printf("install %s: %v", rawArg, err)
 			code = exitGeneral
 			continue
 		}
 
 		result, err := install.Run(install.Options{
-			Repo:       repo,
+			Repo:       spec.repo,
+			Provider:   spec.provider,
+			Host:       spec.host,
 			BinDir:     effectiveBinDir,
 			BinaryName: binaryName,
 			Match:      match,
@@ -281,19 +305,19 @@ func handleInstall(repos []string, binaryName, binDir, match string, all bool, c
 			Zipdown:    zd,
 		})
 		if err != nil {
-			log.Printf("install %s: %v", repo, err)
+			log.Printf("install %s: %v", spec.repo, err)
 			code = mapError(err)
 			continue
 		}
 
 		if !g.dryRun {
-			pkgList.Upsert(repo, result.Version, binaryName, binDir, match, all)
+			pkgList.Upsert(spec.repo, spec.provider, spec.host, result.Version, binaryName, binDir, match, all)
 			if err := pkgList.Save(); err != nil {
-				log.Printf("install %s: save package list: %v", repo, err)
+				log.Printf("install %s: save package list: %v", spec.repo, err)
 				code = exitGeneral
 				continue
 			}
-			fmt.Printf("installed %s %s → %s\n", repo, result.Version, result.BinaryPath)
+			fmt.Printf("installed %s %s → %s\n", spec.repo, result.Version, result.BinaryPath)
 		}
 	}
 	return code
@@ -312,7 +336,7 @@ func handleUpdate(cfg *config.Config, pkgList *packages.List, zd *zipdown.Client
 			fmt.Printf("%s is pinned, skipping\n", entry.Repo)
 			continue
 		}
-		latest, _, err := install.ResolveURL(entry.Repo, entry.Match, cfg.UserAgent, g.verbose, g.debugHTTP)
+		latest, _, err := install.ResolveURL(entry.Provider, entry.Host, entry.Repo, entry.Match, cfg.UserAgent, g.verbose, g.debugHTTP)
 		if err != nil {
 			log.Printf("update %s: %v", entry.Repo, err)
 			code = mapError(err)
@@ -336,6 +360,8 @@ func handleUpdate(cfg *config.Config, pkgList *packages.List, zd *zipdown.Client
 
 		result, err := install.Run(install.Options{
 			Repo:       entry.Repo,
+			Provider:   entry.Provider,
+			Host:       entry.Host,
 			BinDir:     effectiveBinDir,
 			BinaryName: entry.BinaryName,
 			Match:      entry.Match,
@@ -353,7 +379,7 @@ func handleUpdate(cfg *config.Config, pkgList *packages.List, zd *zipdown.Client
 		}
 
 		fmt.Printf("updated %s %s → %s (%s)\n", entry.Repo, entry.Version, result.Version, result.BinaryPath)
-		pkgList.Upsert(entry.Repo, result.Version, entry.BinaryName, entry.BinDir, entry.Match, entry.All)
+		pkgList.Upsert(entry.Repo, entry.Provider, entry.Host, result.Version, entry.BinaryName, entry.BinDir, entry.Match, entry.All)
 	}
 
 	if !g.dryRun {
@@ -385,7 +411,7 @@ func handleList(showURL bool, pkgList *packages.List, cfg *config.Config, g *glo
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", e.Repo, e.Version, e.BinaryName, e.BinDir)
 			continue
 		}
-		_, url, err := install.ResolveURL(e.Repo, e.Match, cfg.UserAgent, g.verbose, g.debugHTTP)
+		_, url, err := install.ResolveURL(e.Provider, e.Host, e.Repo, e.Match, cfg.UserAgent, g.verbose, g.debugHTTP)
 		if err != nil {
 			log.Printf("list %s: resolve url: %v", e.Repo, err)
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", e.Repo, e.Version, e.BinaryName, e.BinDir, "(error)")
@@ -414,7 +440,7 @@ func handleCheck(pkgList *packages.List, cfg *config.Config, g *globals) int {
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", e.Repo, e.Version, "-", "pinned")
 			continue
 		}
-		latest, _, err := install.ResolveURL(e.Repo, e.Match, cfg.UserAgent, g.verbose, g.debugHTTP)
+		latest, _, err := install.ResolveURL(e.Provider, e.Host, e.Repo, e.Match, cfg.UserAgent, g.verbose, g.debugHTTP)
 		if err != nil {
 			log.Printf("check %s: %v", e.Repo, err)
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", e.Repo, e.Version, "(error)", "error")
@@ -456,42 +482,54 @@ func handleRemove(repos []string, pkgList *packages.List) int {
 }
 
 // handleURL resolves and prints the download URL without downloading.
-func handleURL(repos []string, cfg *config.Config, g *globals) int {
+func handleURL(repos []string, flagProvider string, cfg *config.Config, g *globals) int {
 	if len(repos) == 0 {
 		log.Print("url: missing <user/repo> argument")
 		return exitGeneral
 	}
 
 	code := exitOK
-	for _, repo := range repos {
-		if err := validateRepo(repo); err != nil {
-			log.Printf("url %s: %v", repo, err)
+	for _, rawArg := range repos {
+		spec, err := parseRepoArg(rawArg, flagProvider)
+		if err != nil {
+			log.Printf("url %s: %v", rawArg, err)
+			code = exitGeneral
+			continue
+		}
+		if err := validateRepo(spec.repo); err != nil {
+			log.Printf("url %s: %v", rawArg, err)
 			code = exitGeneral
 			continue
 		}
 
-		version, url, err := install.ResolveURL(repo, "", cfg.UserAgent, g.verbose, g.debugHTTP)
+		version, url, err := install.ResolveURL(spec.provider, spec.host, spec.repo, "", cfg.UserAgent, g.verbose, g.debugHTTP)
 		if err != nil {
-			log.Printf("url %s: %v", repo, err)
+			log.Printf("url %s: %v", spec.repo, err)
 			code = mapError(err)
 			continue
 		}
-		fmt.Printf("%s\t%s\t%s\n", repo, version, url)
+		fmt.Printf("%s\t%s\t%s\n", spec.repo, version, url)
 	}
 	return code
 }
 
 // handleShow prints detailed information about a package and lists all available release assets.
-func handleShow(repos []string, pkgList *packages.List, cfg *config.Config, g *globals) int {
+func handleShow(repos []string, flagProvider string, pkgList *packages.List, cfg *config.Config, g *globals) int {
 	if len(repos) == 0 {
 		log.Print("show: missing <user/repo> argument")
 		return exitGeneral
 	}
 
 	code := exitOK
-	for i, repo := range repos {
-		if err := validateRepo(repo); err != nil {
-			log.Printf("show %s: %v", repo, err)
+	for i, rawArg := range repos {
+		spec, err := parseRepoArg(rawArg, flagProvider)
+		if err != nil {
+			log.Printf("show %s: %v", rawArg, err)
+			code = exitGeneral
+			continue
+		}
+		if err := validateRepo(spec.repo); err != nil {
+			log.Printf("show %s: %v", rawArg, err)
 			code = exitGeneral
 			continue
 		}
@@ -500,17 +538,23 @@ func handleShow(repos []string, pkgList *packages.List, cfg *config.Config, g *g
 			fmt.Println()
 		}
 
-		release, err := github.LatestRelease(repo, cfg.UserAgent, g.debugHTTP)
+		var release *github.Release
+		if spec.provider == "gitlab" {
+			release, err = gitlab.LatestRelease(spec.host, spec.repo, cfg.UserAgent, g.debugHTTP)
+		} else {
+			release, err = github.LatestRelease(spec.repo, cfg.UserAgent, g.debugHTTP)
+		}
 		if err != nil {
-			log.Printf("show %s: %v", repo, err)
+			log.Printf("show %s: %v", spec.repo, err)
 			code = mapError(err)
 			continue
 		}
 
-		fmt.Printf("repo:    %s\n", repo)
-		fmt.Printf("latest:  %s\n", release.TagName)
+		fmt.Printf("repo:     %s\n", spec.repo)
+		fmt.Printf("provider: %s\n", spec.provider)
+		fmt.Printf("latest:   %s\n", release.TagName)
 
-		if entry := pkgList.Get(repo); entry != nil {
+		if entry := pkgList.Get(spec.repo); entry != nil {
 			fmt.Printf("tracked: %s", entry.Version)
 			if entry.Version == release.TagName {
 				fmt.Print(" (up to date)")
@@ -556,6 +600,63 @@ func validateRepo(repo string) error {
 	return nil
 }
 
+// repoSpec holds a parsed repo argument.
+type repoSpec struct {
+	repo     string // "owner/name" (GitLab: "group[/subgroup]/name")
+	provider string // "github" or "gitlab"
+	host     string // self-hosted GitLab host; empty for github.com and gitlab.com
+}
+
+// parseRepoArg accepts either:
+//   - "owner/repo"                          → uses the flag-level provider (default "github")
+//   - "https://github.com/owner/repo[/...]" → provider = "github"
+//   - "https://gitlab.com/group/repo[/...]" → provider = "gitlab"
+//   - "https://<host>/group/repo[/...]"     → provider = "gitlab", <host> must be listed in gitlab_hosts
+//
+// The flagProvider is the value of --provider/-p and is used as a fallback
+// when the argument is not a URL.
+func parseRepoArg(arg, flagProvider string) (repoSpec, error) {
+	if strings.HasPrefix(arg, "https://") || strings.HasPrefix(arg, "http://") {
+		u, err := url.Parse(arg)
+		if err != nil {
+			return repoSpec{}, fmt.Errorf("invalid URL %q: %w", arg, err)
+		}
+		host := strings.ToLower(u.Host)
+		path := strings.Trim(u.Path, "/")
+
+		if host == "github.com" {
+			// Extract up to two path segments: /owner/repo (ignore sub-paths like /releases)
+			segments := strings.SplitN(path, "/", 3)
+			if len(segments) < 2 || segments[0] == "" || segments[1] == "" {
+				return repoSpec{}, fmt.Errorf("cannot extract owner/repo from URL %q", arg)
+			}
+			return repoSpec{repo: segments[0] + "/" + segments[1], provider: "github"}, nil
+		}
+
+		if !gitlab.IsKnownHost(host) {
+			return repoSpec{}, fmt.Errorf("unsupported host %q in URL %q (add it to gitlab_hosts in the config)", u.Host, arg)
+		}
+		// GitLab project paths may include subgroups; GitLab UI sub-paths start at "/-/".
+		path = gitlab.TrimPrefix(host, path)
+		path, _, _ = strings.Cut(path, "/-/")
+		path = strings.TrimSuffix(path, ".git")
+		if !strings.Contains(path, "/") {
+			return repoSpec{}, fmt.Errorf("cannot extract group/project from URL %q", arg)
+		}
+		spec := repoSpec{repo: path, provider: "gitlab"}
+		if host != gitlab.DefaultHost {
+			spec.host = host
+		}
+		return spec, nil
+	}
+	// Plain "owner/repo" — use the flag-level provider.
+	provider := flagProvider
+	if provider == "" {
+		provider = "github"
+	}
+	return repoSpec{repo: arg, provider: provider}, nil
+}
+
 // mapError translates domain errors to exit codes.
 func mapError(err error) int {
 	if errors.Is(err, asset.ErrNoAsset) {
@@ -578,7 +679,8 @@ func usage() {
 Usage: wpkget [flags] <command> [args]
 
 Commands:
-  install <user/repo> [...]    install latest Windows release from GitHub
+  install <repo> [...]         install latest release (GitHub by default)
+           [--provider/-p <p>] source provider: github (default) or gitlab
            [--name <binary>]   rename the installed binary (single repo only)
            [--match <pattern>] glob pattern to select the release asset
                                (e.g. --match "*windows-amd64*.zip")
@@ -590,8 +692,16 @@ Commands:
   check                        show latest available version for each tracked package
   remove  <user/repo> [...]    remove packages from tracking (binary not deleted)
   url     <user/repo> [...]    print the download URL without installing
+           [--provider/-p <p>] source provider: github (default) or gitlab
   show    <user/repo> [...]    show package details and all available release assets
+           [--provider/-p <p>] source provider: github (default) or gitlab
   version                      print version and exit
+
+Repo argument formats:
+  owner/repo                          GitHub (default)
+  https://github.com/owner/repo       GitHub (explicit URL)
+  https://gitlab.com/owner/repo[/...] GitLab (auto-detected from URL)
+  owner/repo --provider gitlab        GitLab (explicit flag)
 
 Flags (accepted anywhere on the command line):
   --config    <path>   config file (default: %APPDATA%\wpkget\config.yaml)
@@ -606,6 +716,6 @@ Exit codes:
   0  success
   1  general error
   2  no suitable asset found
-  3  network or GitHub API error
+  3  network or API error
 `)
 }

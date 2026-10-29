@@ -58,6 +58,12 @@ func Select(assets []github.Asset, repoName string, match string, verbose bool) 
 		if noMusl := filterByExcludingMusl(candidates); len(noMusl) > 0 {
 			candidates = noMusl
 		}
+		// On Windows prefer .zip/.exe over .tar.gz when both survive.
+		if goos == "windows" {
+			if preferredExts := filterByPreferredWindowsExt(candidates); len(preferredExts) > 0 {
+				candidates = preferredExts
+			}
+		}
 	}
 
 	if len(candidates) > 1 && verbose {
@@ -191,6 +197,19 @@ func filterByExcludingMusl(assets []github.Asset) []github.Asset {
 	var out []github.Asset
 	for _, a := range assets {
 		if !strings.Contains(strings.ToLower(a.Name), "musl") {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// filterByPreferredWindowsExt keeps only .zip or .exe assets when mixed
+// with .tar.gz/.tgz, avoiding selection of Linux/macOS archive formats on Windows.
+func filterByPreferredWindowsExt(assets []github.Asset) []github.Asset {
+	var out []github.Asset
+	for _, a := range assets {
+		lower := strings.ToLower(a.Name)
+		if strings.HasSuffix(lower, ".zip") || strings.HasSuffix(lower, ".exe") {
 			out = append(out, a)
 		}
 	}

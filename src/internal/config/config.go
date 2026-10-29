@@ -14,6 +14,32 @@ type Config struct {
 	ZipdownURL   string `yaml:"zipdown_url"`
 	ZipdownToken string `yaml:"zipdown_token"`
 	UserAgent    string `yaml:"user_agent"`
+
+	// GitLabHosts lists the self-hosted GitLab instances wpkget may talk to,
+	// keyed by host (and port, if any), e.g. "git.example.com".
+	GitLabHosts map[string]GitLabHost `yaml:"gitlab_hosts"`
+	// PassCmd is the pass-compatible binary used for token_pass lookups.
+	// Defaults to "winpass" on Windows and "pass" elsewhere.
+	PassCmd string `yaml:"pass_cmd"`
+}
+
+// GitLabHost holds the per-instance settings of a self-hosted GitLab.
+// The token is only ever sent to the host it is configured for.
+type GitLabHost struct {
+	// Prefix is the URL path under which GitLab is served, e.g. "/gitlab" for
+	// https://intranet.example.com/gitlab. Leave empty for root installs.
+	Prefix string `yaml:"prefix"`
+	// TokenEnv names an environment variable holding the access token.
+	TokenEnv string `yaml:"token_env"`
+	// TokenPass is a pass/winpass entry whose first line is the access token.
+	// Used when TokenEnv is empty or the variable is unset.
+	TokenPass string `yaml:"token_pass"`
+	// CAFile is a PEM bundle trusted in addition to the system roots.
+	// Environment variables ($VAR / ${VAR}) are expanded; when empty the
+	// WPKGET_CA_FILE environment variable is used.
+	CAFile string `yaml:"ca_file"`
+	// SkipVerify disables TLS certificate verification. Prefer CAFile.
+	SkipVerify bool `yaml:"skip_verify"`
 }
 
 // DefaultDir returns the platform-appropriate config directory for wpkget.
@@ -76,6 +102,10 @@ func Load(path string) (*Config, error) {
 	if overlay.UserAgent != "" {
 		cfg.UserAgent = overlay.UserAgent
 	}
+	if overlay.PassCmd != "" {
+		cfg.PassCmd = overlay.PassCmd
+	}
+	cfg.GitLabHosts = overlay.GitLabHosts
 
 	return cfg, nil
 }
@@ -94,7 +124,16 @@ func writeDefaults(path string, cfg *Config) error {
 		"zipdown_url: \"\"\n" +
 		"zipdown_token: \"\"\n\n" +
 		"# User-Agent for HTTP requests.\n" +
-		"user_agent: \"" + cfg.UserAgent + "\"\n"
+		"user_agent: \"" + cfg.UserAgent + "\"\n\n" +
+		"# Self-hosted GitLab instances (optional). Example:\n" +
+		"# gitlab_hosts:\n" +
+		"#   git.example.com:\n" +
+		"#     prefix: /gitlab                   # only if served under a subpath\n" +
+		"#     token_env: GITLAB_TOKEN_EXAMPLE   # environment variable with the token\n" +
+		"#     token_pass: gitlab/example        # or a pass/winpass entry (first line)\n" +
+		"#     ca_file: ${EXAMPLE_CA_FILE}       # PEM bundle; env vars are expanded\n" +
+		"#     skip_verify: false                # insecure; prefer ca_file\n" +
+		"# pass_cmd: winpass                     # pass-compatible binary for token_pass\n"
 
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		return fmt.Errorf("config: write default config: %w", err)

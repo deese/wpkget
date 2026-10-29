@@ -11,12 +11,14 @@ import (
 // Entry represents a single tracked package.
 type Entry struct {
 	Repo        string `yaml:"repo"`
+	Provider    string `yaml:"provider,omitempty"` // "github" (default) or "gitlab"
+	Host        string `yaml:"host,omitempty"`     // self-hosted GitLab host (empty = gitlab.com)
 	Version     string `yaml:"version"`
 	BinaryName  string `yaml:"binary_name,omitempty"`  // optional custom name for the installed .exe
-	BinDir      string `yaml:"bin_dir,omitempty"`       // optional per-package destination directory
-	Match       string `yaml:"match,omitempty"`         // optional glob pattern used to select the release asset
-	All         bool   `yaml:"all,omitempty"`            // when true, all archive contents are copied to bin_dir
-	KeepVersion bool   `yaml:"keep_version,omitempty"`  // when true, skip update/check for this package
+	BinDir      string `yaml:"bin_dir,omitempty"`      // optional per-package destination directory
+	Match       string `yaml:"match,omitempty"`        // optional glob pattern used to select the release asset
+	All         bool   `yaml:"all,omitempty"`          // when true, all archive contents are copied to bin_dir
+	KeepVersion bool   `yaml:"keep_version,omitempty"` // when true, skip update/check for this package
 }
 
 // List is the in-memory representation of packages.yaml.
@@ -49,10 +51,16 @@ func Load(path string) (*List, error) {
 // binaryName, binDir and match are stored only when non-empty; existing values are
 // preserved when the argument is empty (i.e. update does not clear them).
 // all is always stored as-is.
-func (l *List) Upsert(repo, version, binaryName, binDir, match string, all bool) {
+func (l *List) Upsert(repo, provider, host, version, binaryName, binDir, match string, all bool) {
 	for i, e := range l.Packages {
 		if e.Repo == repo {
 			l.Packages[i].Version = version
+			if provider != "" {
+				l.Packages[i].Provider = provider
+			}
+			if host != "" {
+				l.Packages[i].Host = host
+			}
 			if binaryName != "" {
 				l.Packages[i].BinaryName = binaryName
 			}
@@ -66,7 +74,7 @@ func (l *List) Upsert(repo, version, binaryName, binDir, match string, all bool)
 			return
 		}
 	}
-	l.Packages = append(l.Packages, Entry{Repo: repo, Version: version, BinaryName: binaryName, BinDir: binDir, Match: match, All: all})
+	l.Packages = append(l.Packages, Entry{Repo: repo, Provider: provider, Host: host, Version: version, BinaryName: binaryName, BinDir: binDir, Match: match, All: all})
 }
 
 // Remove deletes the entry for repo. Returns true if it was present.

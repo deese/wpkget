@@ -20,16 +20,19 @@ import (
 
 	"github.com/deese/wpkget/src/internal/asset"
 	"github.com/deese/wpkget/src/internal/github"
+	"github.com/deese/wpkget/src/internal/gitlab"
 	"github.com/deese/wpkget/src/internal/zipdown"
 )
 
 // Options controls a single install run.
 type Options struct {
 	Repo       string
+	Provider   string // "github" (default) or "gitlab"
+	Host       string // GitLab host (empty = gitlab.com)
 	BinDir     string
-	BinaryName string          // optional: rename the installed .exe to this name (without extension)
-	Match      string          // optional: glob pattern to select the release asset (e.g. "*windows-amd64*.zip")
-	All        bool            // when true, copy all archive contents to BinDir instead of extracting a single .exe
+	BinaryName string // optional: rename the installed .exe to this name (without extension)
+	Match      string // optional: glob pattern to select the release asset (e.g. "*windows-amd64*.zip")
+	All        bool   // when true, copy all archive contents to BinDir instead of extracting a single .exe
 	DryRun     bool
 	Verbose    bool
 	Debug      bool            // enable step-by-step diagnostic output
@@ -46,6 +49,14 @@ type Result struct {
 
 var httpClient = &http.Client{Timeout: 120 * time.Second}
 
+// latestRelease dispatches to the correct provider based on opts.Provider.
+func latestRelease(provider, host, repo, userAgent string, debugHTTP bool) (*github.Release, error) {
+	if provider == "gitlab" {
+		return gitlab.LatestRelease(host, repo, userAgent, debugHTTP)
+	}
+	return github.LatestRelease(repo, userAgent, debugHTTP)
+}
+
 // dprint logs a debug message when enabled is true.
 func dprint(enabled bool, format string, args ...any) {
 	if enabled {
@@ -56,7 +67,7 @@ func dprint(enabled bool, format string, args ...any) {
 // Run executes the full install pipeline for a single repository:
 // resolve → download → decompress → move → cleanup.
 func Run(opts Options) (*Result, error) {
-	release, err := github.LatestRelease(opts.Repo, opts.UserAgent, opts.DebugHTTP)
+	release, err := latestRelease(opts.Provider, opts.Host, opts.Repo, opts.UserAgent, opts.DebugHTTP)
 	if err != nil {
 		return nil, err
 	}
@@ -139,10 +150,10 @@ func Run(opts Options) (*Result, error) {
 	return &Result{Version: release.TagName, BinaryPath: dest}, nil
 }
 
-// ResolveURL returns the download URL for the latest Windows release asset
+// ResolveURL returns the download URL for the latest release asset
 // without downloading anything.
-func ResolveURL(repo, match, userAgent string, verbose, debugHTTP bool) (string, string, error) {
-	release, err := github.LatestRelease(repo, userAgent, debugHTTP)
+func ResolveURL(provider, host, repo, match, userAgent string, verbose, debugHTTP bool) (string, string, error) {
+	release, err := latestRelease(provider, host, repo, userAgent, debugHTTP)
 	if err != nil {
 		return "", "", err
 	}
@@ -190,7 +201,17 @@ func downloadURL(url, destDir, name, userAgent string, debugHTTP bool) (string, 
 		log.Printf("debug-http: request:\n%s", dump)
 	}
 
-	resp, err := httpClient.Do(req)
+	// GitLab-hosted assets need the per-host token and TLS settings.
+	client := httpClient
+	glClient, err := gitlab.Prepare(req)
+	if err != nil {
+		return "", fmt.Errorf("install: %w", err)
+	}
+	if glClient != nil {
+		client = glClient
+	}
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("install: download %s: %w", url, err)
 	}
@@ -688,11 +709,8 @@ func moveFile(src, dst string) error {
 }
 
 func repoBaseName(repo string) string {
-	parts := strings.SplitN(repo, "/", 2)
-	if len(parts) == 2 {
-		return parts[1]
-	}
-	return repo
+	// Last segment: GitLab projects may live in nested subgroups.
+	return repo[strings.LastIndex(repo, "/")+1:]
 }
 
 // resolveDestName returns the final filename for the installed binary.
