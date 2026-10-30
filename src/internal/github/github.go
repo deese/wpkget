@@ -9,7 +9,11 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"sync"
 	"time"
+
+	"github.com/deese/wpkget/src/internal/config"
+	"github.com/deese/wpkget/src/internal/secret"
 )
 
 // apiBase is a variable so tests can point it at a local server.
@@ -30,6 +34,45 @@ type Asset struct {
 }
 
 var httpClient = &http.Client{Timeout: 30 * time.Second}
+
+// defaultTokenEnv is the environment variable read when token_env is not set.
+const defaultTokenEnv = "GITHUB_TOKEN"
+
+var (
+	tokenCfg config.GitHubConfig
+	passCmd  string
+	// tokenOnce makes the lookup run once per process, so a pass prompt is
+	// shown at most once and only when a request actually reaches the API.
+	tokenOnce sync.Once
+	token     string
+	tokenErr  error
+)
+
+// Configure sets the credential sources from the user config. It must be
+// called before any request is made.
+func Configure(cfg *config.Config) {
+	tokenCfg = cfg.GitHub
+	passCmd = cfg.PassCmd
+	tokenOnce = sync.Once{}
+}
+
+// authToken returns the API token: the environment variable first, then the
+// pass entry. An empty token is valid (anonymous requests).
+func authToken() (string, error) {
+	tokenOnce.Do(func() {
+		env := tokenCfg.TokenEnv
+		if env == "" {
+			env = defaultTokenEnv
+		}
+		if token = os.Getenv(env); token != "" {
+			return
+		}
+		if tokenCfg.TokenPass != "" {
+			token, tokenErr = secret.FromPass(passCmd, tokenCfg.TokenPass)
+		}
+	})
+	return token, tokenErr
+}
 
 // ErrNotFound matches (errors.Is) the errors returned when a repository or
 // release does not exist, for both GitHub and GitLab.
@@ -73,7 +116,11 @@ func fetchRelease(apiURL, notFound, repo, userAgent string, debugHTTP bool) (*Re
 	if userAgent != "" {
 		req.Header.Set("User-Agent", userAgent)
 	}
-	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
+	token, err := authToken()
+	if err != nil {
+		return nil, fmt.Errorf("github: token: %w", err)
+	}
+	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 

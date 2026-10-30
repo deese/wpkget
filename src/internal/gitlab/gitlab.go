@@ -1,7 +1,6 @@
 package gitlab
 
 import (
-	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -11,13 +10,13 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
-	"os/exec"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/deese/wpkget/src/internal/config"
 	"github.com/deese/wpkget/src/internal/github"
+	"github.com/deese/wpkget/src/internal/secret"
 )
 
 const (
@@ -27,7 +26,6 @@ const (
 	defaultTokenEnv = "GITLAB_TOKEN"
 	caFileEnv       = "WPKGET_CA_FILE"
 	tokenHeader     = "PRIVATE-TOKEN"
-	passTimeout     = 60 * time.Second
 	clientTimeout   = 120 * time.Second
 )
 
@@ -272,32 +270,9 @@ func resolveToken(hc config.GitLabHost) (string, error) {
 		}
 	}
 	if hc.TokenPass != "" {
-		return tokenFromPass(hc.TokenPass)
+		return secret.FromPass(passCmd, hc.TokenPass)
 	}
 	return "", nil
-}
-
-// tokenFromPass reads the first line of a pass/winpass entry.
-func tokenFromPass(entry string) (string, error) {
-	if strings.HasPrefix(entry, "-") {
-		return "", fmt.Errorf("invalid pass entry %q", entry)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), passTimeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, passCmd, "show", entry)
-	cmd.Stdin = os.Stdin // allow passphrase/PIN prompts
-	cmd.Stderr = os.Stderr
-	out, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("%s show %s: %w", passCmd, entry, err)
-	}
-	line, _, _ := strings.Cut(string(out), "\n")
-	token := strings.TrimSpace(line)
-	if token == "" {
-		return "", fmt.Errorf("%s show %s: empty entry", passCmd, entry)
-	}
-	return token, nil
 }
 
 // hostPrefix returns the normalized URL path prefix of host ("" or "/gitlab").
