@@ -99,6 +99,7 @@ func setup(g *globals) (*config.Config, *packages.List, *zipdown.Client) {
 		}
 		cfg.Progress = g.progress
 	}
+	github.Configure(cfg)
 	gitlab.Configure(cfg)
 	zd := zipdown.New(cfg.ZipdownURL, cfg.ZipdownToken, cfg.UserAgent)
 	zd.SetDebugHTTP(g.debugHTTP)

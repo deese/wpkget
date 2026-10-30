@@ -21,6 +21,8 @@ type Config struct {
 	// GitLabHosts lists the self-hosted GitLab instances wpkget may talk to,
 	// keyed by host (and port, if any), e.g. "git.example.com".
 	GitLabHosts map[string]GitLabHost `yaml:"gitlab_hosts"`
+	// GitHub holds the GitHub API credentials.
+	GitHub GitHubConfig `yaml:"github"`
 	// PassCmd is the pass-compatible binary used for token_pass lookups.
 	// Defaults to "winpass" on Windows and "pass" elsewhere.
 	PassCmd string `yaml:"pass_cmd"`
@@ -30,6 +32,18 @@ type Config struct {
 	// ModernTerm enables the colored output with aligned columns, a live
 	// progress line and a summary (see internal/ui). Off by default.
 	ModernTerm bool `yaml:"modern_term"`
+}
+
+// GitHubConfig holds the credentials used for api.github.com requests. A token
+// lifts the anonymous rate limit (60 requests per hour). It is only ever sent
+// to the GitHub API, never to asset downloads.
+type GitHubConfig struct {
+	// TokenEnv names an environment variable holding the token.
+	// Defaults to GITHUB_TOKEN.
+	TokenEnv string `yaml:"token_env"`
+	// TokenPass is a pass/winpass entry whose first line is the token.
+	// Used when the environment variable is unset or empty.
+	TokenPass string `yaml:"token_pass"`
 }
 
 // GitLabHost holds the per-instance settings of a self-hosted GitLab.
@@ -124,6 +138,7 @@ func Load(path string) (*Config, error) {
 		cfg.Progress = overlay.Progress
 	}
 	cfg.GitLabHosts = overlay.GitLabHosts
+	cfg.GitHub = overlay.GitHub
 
 	return cfg, nil
 }
@@ -149,6 +164,11 @@ func writeDefaults(path string, cfg *Config) error {
 		"# Modern terminal output: colors, aligned columns, live progress and a summary.\n" +
 		"# Only used on terminals; override per run with --modern / --no-modern.\n" +
 		"modern_term: false\n\n" +
+		"# GitHub API token (optional): lifts the anonymous limit of 60 requests per hour.\n" +
+		"# Read from the environment variable first, then from the pass entry (first line).\n" +
+		"# github:\n" +
+		"#   token_env: GITHUB_TOKEN             # default\n" +
+		"#   token_pass: github/wpkget           # pass/winpass entry, see pass_cmd\n\n" +
 		"# Self-hosted GitLab instances (optional). Example:\n" +
 		"# gitlab_hosts:\n" +
 		"#   git.example.com:\n" +

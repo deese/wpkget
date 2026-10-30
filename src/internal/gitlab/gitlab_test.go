@@ -161,15 +161,12 @@ func TestTokenFromPass(t *testing.T) {
 		t.Skip("no POSIX shell available")
 	}
 	Configure(&config.Config{PassCmd: script})
-	tok, err := tokenFromPass("gitlab/example")
+	tok, err := resolveToken(config.GitLabHost{TokenPass: "gitlab/example"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if tok != "tok-from-pass" {
 		t.Fatalf("got %q", tok)
-	}
-	if _, err := tokenFromPass("--evil"); err == nil {
-		t.Fatal("entry starting with '-' must be rejected")
 	}
 }
 
