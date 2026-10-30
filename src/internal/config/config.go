@@ -27,6 +27,9 @@ type Config struct {
 	// Progress controls the download progress bar: "auto" (terminals only),
 	// "always" or "never". Overridden per run by --progress.
 	Progress string `yaml:"progress"`
+	// ModernTerm enables the colored output with aligned columns, a live
+	// progress line and a summary (see internal/ui). Off by default.
+	ModernTerm bool `yaml:"modern_term"`
 }
 
 // GitLabHost holds the per-instance settings of a self-hosted GitLab.
@@ -111,6 +114,9 @@ func Load(path string) (*Config, error) {
 	if overlay.PassCmd != "" {
 		cfg.PassCmd = overlay.PassCmd
 	}
+	if overlay.ModernTerm {
+		cfg.ModernTerm = true
+	}
 	if overlay.Progress != "" {
 		if !progress.ValidMode(overlay.Progress) {
 			return nil, fmt.Errorf("config: %s: invalid progress %q (want auto, always or never)", resolved, overlay.Progress)
@@ -140,6 +146,9 @@ func writeDefaults(path string, cfg *Config) error {
 		"# Download progress bar: auto (terminals only), always or never.\n" +
 		"# Override per run with --progress.\n" +
 		"progress: " + progress.Auto + "\n\n" +
+		"# Modern terminal output: colors, aligned columns, live progress and a summary.\n" +
+		"# Only used on terminals; override per run with --modern / --no-modern.\n" +
+		"modern_term: false\n\n" +
 		"# Self-hosted GitLab instances (optional). Example:\n" +
 		"# gitlab_hosts:\n" +
 		"#   git.example.com:\n" +

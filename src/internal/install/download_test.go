@@ -29,7 +29,7 @@ func TestDownloadURLProgress(t *testing.T) {
 		var err error
 		var path string
 		if bar != nil {
-			path, err = downloadURL(srv.URL, t.TempDir(), "tool.zip", "", false, bar)
+			path, err = downloadURL(srv.URL, t.TempDir(), "tool.zip", "", false, legacyFeedback{bar})
 		} else {
 			path, err = downloadURL(srv.URL, t.TempDir(), "tool.zip", "", false, nil)
 		}

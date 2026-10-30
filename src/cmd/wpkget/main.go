@@ -19,6 +19,7 @@ import (
 	"github.com/deese/wpkget/src/internal/install"
 	"github.com/deese/wpkget/src/internal/packages"
 	"github.com/deese/wpkget/src/internal/progress"
+	"github.com/deese/wpkget/src/internal/ui"
 	"github.com/deese/wpkget/src/internal/zipdown"
 )
 
@@ -43,6 +44,8 @@ type globals struct {
 	debug      bool
 	debugHTTP  bool
 	progress   string
+	modern     optBool
+	quiet      bool
 }
 
 // registerGlobals binds global flags to g on the given FlagSet.
@@ -55,6 +58,10 @@ func registerGlobals(fs *flag.FlagSet, g *globals) {
 	fs.BoolVar(&g.debug, "debug", false, "print step-by-step diagnostic output")
 	fs.BoolVar(&g.debugHTTP, "debug-http", false, "dump outgoing HTTP requests and response bodies")
 	fs.StringVar(&g.progress, "progress", "", "download progress bar: auto (default), always or never")
+	fs.Var(&g.modern, "modern", "modern terminal output: colors, aligned columns, live progress (overrides modern_term)")
+	fs.BoolFunc("no-modern", "classic terminal output (overrides modern_term)", func(string) error { g.modern = optBool{set: true}; return nil })
+	fs.BoolVar(&g.quiet, "quiet", false, "modern output: hide up-to-date and pinned packages")
+	fs.BoolVar(&g.quiet, "q", false, "shorthand for --quiet")
 }
 
 // parseInterspersed calls fs.Parse repeatedly, collecting positional arguments
@@ -299,21 +306,40 @@ func handleInstall(repos []string, binaryName, binDir, match string, all bool, f
 		effectiveBinDir = binDir
 	}
 
+	var names []string
+	for _, arg := range repos {
+		if spec, err := parseRepoArg(arg, flagProvider); err == nil {
+			names = append(names, spec.repo)
+		}
+	}
+	u := newUI(cfg, g, names, nil) // nil selects the classic output
+	if u != nil {
+		u.Header(headerTitle, effectiveBinDir)
+	}
+
 	code := exitOK
+	// fail reports an error as a row (modern output) or on stderr (classic).
+	fail := func(repo string, err error, c int) {
+		code = c
+		if u != nil {
+			u.Row(ui.Result{Repo: repo, Status: ui.Failed, Err: err})
+			return
+		}
+		log.Printf("install %s: %v", repo, err)
+	}
+
 	for _, rawArg := range repos {
 		spec, err := parseRepoArg(rawArg, flagProvider)
 		if err != nil {
-			log.Printf("install %s: %v", rawArg, err)
-			code = exitGeneral
+			fail(rawArg, err, exitGeneral)
 			continue
 		}
 		if err := validateRepo(spec.repo); err != nil {
-			log.Printf("install %s: %v", rawArg, err)
-			code = exitGeneral
+			fail(rawArg, err, exitGeneral)
 			continue
 		}
 
-		result, err := install.Run(install.Options{
+		opts := install.Options{
 			Repo:       spec.repo,
 			Provider:   spec.provider,
 			Host:       spec.host,
@@ -328,22 +354,38 @@ func handleInstall(repos []string, binaryName, binDir, match string, all bool, f
 			UserAgent:  cfg.UserAgent,
 			Progress:   progressOut(cfg, g),
 			Zipdown:    zd,
-		})
+		}
+		if u != nil {
+			opts.Feedback = u
+		}
+		result, err := install.Run(opts)
 		if err != nil {
-			log.Printf("install %s: %v", spec.repo, err)
-			code = mapError(err)
+			fail(spec.repo, err, mapError(err))
 			continue
 		}
 
-		if !g.dryRun {
-			pkgList.Upsert(spec.repo, spec.provider, spec.host, result.Version, binaryName, binDir, match, all)
-			if err := pkgList.Save(); err != nil {
-				log.Printf("install %s: save package list: %v", spec.repo, err)
-				code = exitGeneral
-				continue
+		if g.dryRun {
+			if u != nil {
+				u.Row(ui.Result{Repo: spec.repo, New: result.Version, Status: ui.Updated, DryRun: true})
 			}
-			fmt.Printf("installed %s %s → %s\n", spec.repo, result.Version, result.BinaryPath)
+			continue
 		}
+
+		pkgList.Upsert(spec.repo, spec.provider, spec.host, result.Version, binaryName, binDir, match, all)
+		if err := pkgList.Save(); err != nil {
+			log.Printf("install %s: save package list: %v", spec.repo, err)
+			code = exitGeneral
+			continue
+		}
+		if u != nil {
+			u.Row(ui.Result{Repo: spec.repo, New: result.Version, Status: ui.Updated, Size: result.Size, Dur: result.Duration})
+			continue
+		}
+		fmt.Printf("installed %s %s → %s\n", spec.repo, result.Version, result.BinaryPath)
+	}
+
+	if u != nil {
+		u.Summary()
 	}
 	return code
 }
@@ -371,25 +413,56 @@ func handleUpdate(repos []string, cfg *config.Config, pkgList *packages.List, zd
 		}
 	}
 
+	var names, versions []string
+	for _, e := range targets {
+		names = append(names, e.Repo)
+		versions = append(versions, e.Version)
+	}
+	u := newUI(cfg, g, names, versions) // nil selects the classic output
+	if u != nil {
+		u.Header(headerTitle, cfg.BinDir)
+	}
+
+	// fail reports an error as a row (modern output) or on stderr (classic).
+	fail := func(entry packages.Entry, err error) {
+		code = mapError(err)
+		if u != nil {
+			u.Row(ui.Result{Repo: entry.Repo, Old: entry.Version, Status: ui.Failed, Err: err})
+			return
+		}
+		log.Printf("update %s: %v", entry.Repo, err)
+	}
+
 	for _, entry := range targets {
 		if entry.KeepVersion {
-			fmt.Printf("%s is pinned, skipping\n", entry.Repo)
+			if u != nil {
+				u.Row(ui.Result{Repo: entry.Repo, New: entry.Version, Status: ui.Pinned})
+			} else {
+				fmt.Printf("%s is pinned, skipping\n", entry.Repo)
+			}
 			continue
 		}
 		latest, _, err := install.ResolveURL(entry.Provider, entry.Host, entry.Repo, entry.Match, cfg.UserAgent, g.verbose, g.debugHTTP)
 		if err != nil {
-			log.Printf("update %s: %v", entry.Repo, err)
-			code = mapError(err)
+			fail(entry, err)
 			continue
 		}
 
 		if latest == entry.Version {
-			fmt.Printf("%s is up to date (%s)\n", entry.Repo, entry.Version)
+			if u != nil {
+				u.Row(ui.Result{Repo: entry.Repo, New: entry.Version, Status: ui.UpToDate})
+			} else {
+				fmt.Printf("%s is up to date (%s)\n", entry.Repo, entry.Version)
+			}
 			continue
 		}
 
 		if g.dryRun {
-			fmt.Printf("dry-run: would update %s %s → %s\n", entry.Repo, entry.Version, latest)
+			if u != nil {
+				u.Row(ui.Result{Repo: entry.Repo, Old: entry.Version, New: latest, Status: ui.Updated, DryRun: true})
+			} else {
+				fmt.Printf("dry-run: would update %s %s → %s\n", entry.Repo, entry.Version, latest)
+			}
 			continue
 		}
 
@@ -398,7 +471,7 @@ func handleUpdate(repos []string, cfg *config.Config, pkgList *packages.List, zd
 			effectiveBinDir = entry.BinDir
 		}
 
-		result, err := install.Run(install.Options{
+		opts := install.Options{
 			Repo:       entry.Repo,
 			Provider:   entry.Provider,
 			Host:       entry.Host,
@@ -412,22 +485,31 @@ func handleUpdate(repos []string, cfg *config.Config, pkgList *packages.List, zd
 			UserAgent:  cfg.UserAgent,
 			Progress:   progressOut(cfg, g),
 			Zipdown:    zd,
-		})
+		}
+		if u != nil {
+			opts.Feedback = u
+		}
+		result, err := install.Run(opts)
 		if err != nil {
-			log.Printf("update %s: %v", entry.Repo, err)
-			code = mapError(err)
+			fail(entry, err)
 			continue
 		}
 
-		fmt.Printf("updated %s %s → %s (%s)\n", entry.Repo, entry.Version, result.Version, result.BinaryPath)
+		if u != nil {
+			u.Row(ui.Result{Repo: entry.Repo, Old: entry.Version, New: result.Version, Status: ui.Updated, Size: result.Size, Dur: result.Duration})
+		} else {
+			fmt.Printf("updated %s %s → %s (%s)\n", entry.Repo, entry.Version, result.Version, result.BinaryPath)
+		}
 		pkgList.Upsert(entry.Repo, entry.Provider, entry.Host, result.Version, entry.BinaryName, entry.BinDir, entry.Match, entry.All)
+		// Save after each package so an interruption (e.g. Ctrl+C) keeps the progress made so far.
+		if err := pkgList.Save(); err != nil {
+			log.Printf("update %s: save package list: %v", entry.Repo, err)
+			code = exitGeneral
+		}
 	}
 
-	if !g.dryRun {
-		if err := pkgList.Save(); err != nil {
-			log.Printf("update: save package list: %v", err)
-			return exitGeneral
-		}
+	if u != nil {
+		u.Summary()
 	}
 	return code
 }
@@ -781,6 +863,8 @@ Flags (accepted anywhere on the command line):
   --debug              print step-by-step diagnostic output
   --debug-http         dump outgoing HTTP requests and response bodies
   --progress  <mode>   download progress bar: auto (default), always, never
+  --modern, --no-modern  modern terminal output: colors, aligned columns, live progress (config: modern_term)
+  --quiet, -q          modern output: hide up-to-date and pinned packages
 
 Exit codes:
   0  success

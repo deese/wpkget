@@ -112,7 +112,7 @@ func TestSlowHeadersWithinTimeoutSucceed(t *testing.T) {
 	shortTimeouts(t, 5*time.Second, 5*time.Second)
 
 	var out bytes.Buffer
-	path, err := downloadURL(srv.URL, t.TempDir(), "tool.zip", "", false, &out)
+	path, err := downloadURL(srv.URL, t.TempDir(), "tool.zip", "", false, legacyFeedback{&out})
 	if err != nil {
 		t.Fatal(err)
 	}

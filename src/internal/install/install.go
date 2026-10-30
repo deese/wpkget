@@ -16,11 +16,11 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/deese/wpkget/src/internal/asset"
 	"github.com/deese/wpkget/src/internal/github"
 	"github.com/deese/wpkget/src/internal/gitlab"
-	"github.com/deese/wpkget/src/internal/progress"
 	"github.com/deese/wpkget/src/internal/zipdown"
 )
 
@@ -39,13 +39,16 @@ type Options struct {
 	DebugHTTP  bool            // dump outgoing HTTP requests and response bodies
 	UserAgent  string          // custom User-Agent header for HTTP requests
 	Progress   io.Writer       // where to draw the download progress bar; nil disables it
+	Feedback   Feedback        // download events for the modern output; takes precedence over Progress
 	Zipdown    *zipdown.Client // nil means zipdown is disabled
 }
 
 // Result is returned by a successful Run.
 type Result struct {
 	Version    string
-	BinaryPath string // final location of the installed binary
+	BinaryPath string        // final location of the installed binary
+	Size       int64         // bytes downloaded
+	Duration   time.Duration // time spent downloading
 }
 
 // httpClient has no overall timeout: downloads are bounded by the header and idle timeouts in downloadURL.
@@ -89,13 +92,15 @@ func Run(opts Options) (*Result, error) {
 	destName := resolveDestName(opts.BinaryName, repoName)
 
 	if opts.DryRun {
-		fmt.Printf("dry-run: would install %s %s\n", opts.Repo, release.TagName)
-		fmt.Printf("dry-run: asset      %s\n", chosen.Name)
-		fmt.Printf("dry-run: url        %s\n", chosen.BrowserDownloadURL)
-		if opts.All {
-			fmt.Printf("dry-run: dest (all) %s\n", opts.BinDir)
-		} else {
-			fmt.Printf("dry-run: dest       %s\n", filepath.Join(opts.BinDir, destName))
+		if opts.Feedback == nil { // the modern output reports the dry run itself
+			fmt.Printf("dry-run: would install %s %s\n", opts.Repo, release.TagName)
+			fmt.Printf("dry-run: asset      %s\n", chosen.Name)
+			fmt.Printf("dry-run: url        %s\n", chosen.BrowserDownloadURL)
+			if opts.All {
+				fmt.Printf("dry-run: dest (all) %s\n", opts.BinDir)
+			} else {
+				fmt.Printf("dry-run: dest       %s\n", filepath.Join(opts.BinDir, destName))
+			}
 		}
 		return &Result{Version: release.TagName}, nil
 	}
@@ -112,9 +117,15 @@ func Run(opts Options) (*Result, error) {
 	}()
 
 	// Download the asset (or let zipdown wrap a bare .exe).
+	dlStart := time.Now()
 	archivePath, err := download(opts, chosen, tmpDir)
 	if err != nil {
 		return nil, err
+	}
+	dlDur := time.Since(dlStart)
+	var dlSize int64
+	if info, err := os.Stat(archivePath); err == nil {
+		dlSize = info.Size()
 	}
 	dprint(opts.Debug, "debug: downloaded archive → %s", archivePath)
 
@@ -131,7 +142,7 @@ func Run(opts Options) (*Result, error) {
 		if opts.Verbose {
 			log.Printf("installed all files from %s %s → %s", opts.Repo, release.TagName, opts.BinDir)
 		}
-		return &Result{Version: release.TagName, BinaryPath: opts.BinDir}, nil
+		return &Result{Version: release.TagName, BinaryPath: opts.BinDir, Size: dlSize, Duration: dlDur}, nil
 	}
 
 	// Locate the single binary inside the archive (or use directly for bare .exe).
@@ -151,7 +162,7 @@ func Run(opts Options) (*Result, error) {
 		}
 	}
 
-	return &Result{Version: release.TagName, BinaryPath: dest}, nil
+	return &Result{Version: release.TagName, BinaryPath: dest, Size: dlSize, Duration: dlDur}, nil
 }
 
 // sourceLabel describes where a release comes from, e.g. "github" or "gitlab git.example.com".
@@ -198,7 +209,11 @@ func download(opts Options, chosen *github.Asset, tmpDir string) (string, error)
 	}
 
 	dprint(opts.Debug, "debug: download %s → %s", chosen.BrowserDownloadURL, filepath.Join(tmpDir, chosen.Name))
-	path, err := downloadURL(chosen.BrowserDownloadURL, tmpDir, chosen.Name, opts.UserAgent, opts.DebugHTTP, opts.Progress)
+	fb := opts.Feedback
+	if fb == nil && opts.Progress != nil {
+		fb = legacyFeedback{opts.Progress}
+	}
+	path, err := downloadURL(chosen.BrowserDownloadURL, tmpDir, chosen.Name, opts.UserAgent, opts.DebugHTTP, fb)
 	if err != nil {
 		return "", err
 	}
@@ -210,9 +225,9 @@ func download(opts Options, chosen *github.Asset, tmpDir string) (string, error)
 }
 
 // downloadURL streams a URL to destDir/<name> and returns the full path.
-// When progressOut is non-nil it announces the download, shows a counter while
-// waiting for the server and then draws a progress bar on it.
-func downloadURL(url, destDir, name, userAgent string, debugHTTP bool, progressOut io.Writer) (string, error) {
+// When fb is non-nil it is told about the wait for the server and the transfer
+// progress, so the caller can show it.
+func downloadURL(url, destDir, name, userAgent string, debugHTTP bool, fb Feedback) (string, error) {
 	ctx, cancel, timer := newDownloadContext()
 	defer cancel()
 
@@ -242,9 +257,8 @@ func downloadURL(url, destDir, name, userAgent string, debugHTTP bool, progressO
 	}
 
 	stopWait := func() {}
-	if progressOut != nil {
-		fmt.Fprintf(progressOut, "downloading %s from %s\n", name, req.URL.Host)
-		stopWait = progress.StartWait(progressOut, name)
+	if fb != nil {
+		stopWait = fb.Waiting(name, req.URL.Host)
 	}
 	resp, err := client.Do(req)
 	stopWait()
@@ -274,11 +288,11 @@ func downloadURL(url, destDir, name, userAgent string, debugHTTP bool, progressO
 	defer f.Close()
 
 	var body io.Reader = &idleReader{r: resp.Body, timer: timer}
-	var bar *progress.Reader
-	if progressOut != nil {
-		bar = progress.NewReader(body, progressOut, name, resp.ContentLength)
-		defer bar.Close()
-		body = bar
+	finished := false
+	if fb != nil {
+		var finish func(ok bool)
+		body, finish = fb.Wrap(body, name, resp.ContentLength)
+		defer func() { finish(finished) }()
 	}
 
 	if _, err := io.Copy(f, body); err != nil {
@@ -287,9 +301,7 @@ func downloadURL(url, destDir, name, userAgent string, debugHTTP bool, progressO
 		}
 		return "", fmt.Errorf("install: write download: %w", err)
 	}
-	if bar != nil {
-		bar.Finish()
-	}
+	finished = true
 
 	return dest, nil
 }

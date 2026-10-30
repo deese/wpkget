@@ -1,14 +1,14 @@
 # wpkget
 
-A minimal Windows package manager that pulls compiled binaries directly from GitHub and GitLab releases (gitlab.com and self-hosted instances).
+A minimal package manager that pulls compiled binaries directly from GitHub and GitLab releases (gitlab.com and self-hosted instances). It targets Windows first and also builds for Linux and macOS.
 
 ## Installation
 
 ```
-go install github.com/deese/wpkget@latest
+go install github.com/deese/wpkget/src/cmd/wpkget@latest
 ```
 
-Or download the latest release binary and place it in a directory on your `PATH`.
+Or download the latest release archive for your platform (`wpkget_<os>_<arch>.zip` on Windows, `.tar.gz` elsewhere) and place the binary in a directory on your `PATH`. `wpkget version` prints the installed version.
 
 ## Configuration
 
@@ -45,6 +45,10 @@ user_agent: "wpkget"
 # Override per run with --progress.
 progress: auto
 
+# Modern terminal output (colors, aligned columns, live progress, summary).
+# Off by default; override per run with --modern / --no-modern.
+modern_term: false
+
 # Optional: self-hosted GitLab instances (see "GitLab" below).
 gitlab_hosts:
   git.example.com:
@@ -56,7 +60,7 @@ pass_cmd: winpass
 
 ### Install a package
 
-Download and install the latest Windows release from a GitHub repository.
+Download and install the latest release of a GitHub or GitLab repository.
 
 ```
 wpkget install <user/repo> [...]
@@ -77,7 +81,7 @@ wpkget install neovim/neovim --name nvim
 wpkget install https://gitlab.com/group/project
 ```
 
-wpkget selects the release asset whose name contains `windows` and whose extension is `.zip`, `.tar.gz`, `.gz`, or `.exe`.
+wpkget selects the release asset built for your operating system and architecture, among files ending in `.zip`, `.tar.gz`, `.gz` or `.exe` (and bare extensionless binaries on Linux and macOS). Use `--match` when the choice is ambiguous; `wpkget show <repo>` lists the available assets, and `--verbose` prints how the choice was made.
 The binary is extracted (if compressed) and moved to `bin_dir`. The archive is deleted afterward.
 
 ### GitLab
@@ -150,9 +154,9 @@ assets (12):
   fzf-0.57.0-windows_amd64.zip  https://github.com/junegunn/fzf/releases/download/...
 ```
 
-### Check for updates
+### Update packages
 
-Check all tracked packages for new releases.
+Check all tracked packages for new releases and install the newer ones. The package list is saved after each package, so an interrupted run keeps what was already updated.
 
 ```
 wpkget update [<repo> ...]
@@ -206,7 +210,7 @@ wpkget remove <user/repo>
 
 ## Package list
 
-wpkget maintains a package list at `%APPDATA%\wpkget\packages.yaml`.
+wpkget maintains a package list in `packages.yaml`, stored next to the effective config file (by default `%APPDATA%\wpkget\packages.yaml` on Windows). `wpkget config path packages` prints the location.
 
 ```yaml
 packages:
@@ -243,6 +247,8 @@ The file is updated automatically after each successful install or update.
 | `--verbose` | Enable verbose output |
 | `--debug` | Print step-by-step diagnostic output |
 | `--debug-http` | Dump outgoing HTTP requests and response bodies |
+| `--modern` / `--no-modern` | Force the modern terminal output on or off for this run. Overrides `modern_term` |
+| `--quiet`, `-q` | Modern output only: hide up-to-date and pinned packages (the summary still counts them) |
 | `--progress <mode>` | Download progress bar: `auto` (default), `always` or `never`. Overrides the `progress` config key |
 
 ### Download behavior
@@ -255,7 +261,38 @@ When the provider publishes the asset size (GitHub does) wpkget checks that the 
 
 Some proxies treat unknown clients differently, for example by trickling a partial file while it is scanned. wpkget identifies itself with the `user_agent` setting (default `wpkget`), which a proxy rule can match.
 
+### Modern output
+
+With `modern_term: true` in the config (or `--modern` for one run), `install` and `update` print a colored, column-aligned report instead of one plain line per package:
+
+```
+ ⟳ wpkget · d:\CustomTools\bin
+
+ ✓ deese/tfdown                          v1.3.0
+ ✓ burntsushi/ripgrep                    15.2.0
+ ▲ google-antigravity/antigravity-cli    1.4.8     → 1.4.10      60.2 MiB    0.7s
+ ▲ ipinfo/cli                            3.3.2     → 3.3.4        5.2 MiB    0.1s
+ • neovim/neovim                         v0.10.4   pinned
+ ✗ foo/bar
+     timeout
+
+ ──────────────────────────────────────────────
+ ▲ 2 updated  ✓ 2 up to date  • 1 pinned  ✗ 1 errors   65.4 MiB · 0.8s
+```
+
+Rows are printed as each package finishes, so a long `update` shows progress and an interrupted one still shows what was done. While a download runs, a single live line shows `waiting for server... Ns` until the first byte arrives and then a bar (`████████░░░░  64%  149.5/233.6 MiB`); it is erased when the row is printed. Version tags are shown without their prefix (`ipinfo-3.3.2` becomes `3.3.2`); `packages.yaml` keeps the full tag.
+
+Colors: green for up to date and new versions, yellow for updates, red for old versions and errors, gray for secondary text. Rules:
+
+- It is used only when stdout is a terminal. If it is not (a file, a pipe), the classic output is kept so logs stay stable. `--modern` skips that detection, which is needed in terminals Go cannot recognize, such as Git Bash (mintty).
+- `NO_COLOR` removes the colors but keeps the layout.
+- Unicode icons are used by default. On a Windows console that is neither Windows Terminal nor an xterm-like emulator, or with `WPKGET_ASCII=1`, ASCII icons (`+ ^ x`) are used.
+- With `--verbose`, `--debug`, `--debug-http` or `--progress never` the live line is not drawn (the rows and summary still are).
+- `check`, `list`, `show` and the other commands keep the classic output.
+
 ### Progress bar
+
+This section describes the classic bar, used when the modern output is off.
 
 Downloads draw a one-line progress bar on stderr:
 

@@ -28,7 +28,9 @@ wpkget/
 │       ├── config/
 │       │   └── config.go        # config file loading and defaults
 │       ├── progress/
-│       │   └── progress.go      # stdlib-only download progress bar
+│       │   └── progress.go      # stdlib-only download progress bar (classic output)
+│       ├── ui/
+│       │   └── ui.go, live.go   # opt-in modern output (colors, rows, live line, summary)
 │       └── zipdown/
 │           └── zipdown.go       # zipdown service client
 └── go.mod
@@ -150,6 +152,17 @@ No third-party decompression library is used. The standard library covers all fo
 
 **Progress bar:** `internal/progress` wraps the response body in an `io.Reader` that counts bytes and rewrites one stderr line with `\r` (at most every 100 ms, plus a final summary line). The total comes from `Content-Length`; when it is missing only counters are shown. It uses no dependency: ASCII bar, fixed line width (asset name shortened from the middle), no ANSI colors, because the terminal width cannot be queried without `golang.org/x/term` and ANSI is not portable across Windows consoles. Mode is `progress` in the config or `--progress`, with `auto` meaning "stderr is a character device". That check does not recognize mintty (Git Bash), where `always` is needed. Auto mode is also disabled by `--verbose`/`--debug`/`--debug-http`, since those logs share stderr. `install.Options.Progress` is the `io.Writer` to draw on (nil disables); zipdown downloads (`Wrap`) are not instrumented. If a download aborts, `Close` ends the line so later logs do not overwrite the bar.
 
+**Modern output:** `internal/ui` is an opt-in presentation layer for `install` and `update`, enabled by `modern_term` or `--modern` and leaving the classic text untouched when off. Decisions worth knowing:
+
+- *Feedback seam.* `install` does not know about either renderer: `Options.Feedback` (`install.Feedback`: `Waiting` before the request, `Wrap` around the body) is implemented by `ui.UI` for the modern output and by `legacyFeedback` for the classic one (which keeps the `downloading … from …` notice, the wait counter and the bar from `internal/progress`). `install.Run` also returns the downloaded size and elapsed time so callers can report them, and skips its own `dry-run:` lines when a `Feedback` is set because the caller prints a `(dry-run)` row.
+- *Rows are streamed.* Each package prints its row when it finishes, not in a final pass, so a long `update` shows activity and an interrupted one keeps a coherent partial report. Column widths are computed up front from the package list (names exactly; versions with a 10-column minimum, so a longer new version only shifts its own row).
+- *Terminal vs. color are separate.* Terminal detection (stdout is a character device and, on Windows, `ENABLE_VIRTUAL_TERMINAL_PROCESSING` could be enabled with `syscall`, no `x/sys`) decides whether to use the modern layout and cursor control; `NO_COLOR` only drops the color codes. A configured but non-terminal stdout falls back to the classic output; `--modern` forces it, which is the escape hatch for mintty, where Go cannot see a terminal.
+- *Alignment.* Padding is applied to runes before coloring, because ANSI escapes would otherwise count as visible characters. Icons are Unicode, falling back to ASCII on a Windows console without `WT_SESSION` and without `TERM`, or with `WPKGET_ASCII` set; that heuristic is untested on real consoles.
+- *Live line.* One line redrawn with `\r\x1b[2K` (waiting counter, then bar), erased before the row is printed. Downloads are sequential, so one line suffices; parallel downloads would need one line per transfer. It is disabled with `--verbose`/`--debug`/`--debug-http`, whose logs share the terminal, and with `--progress never`.
+- *Glyph choice.* The check and cross are `✓` (U+2713) and `✗` (U+2717), not the heavier `✔` (U+2714) and `✖` (U+2716): the latter have an emoji presentation, and terminals that draw them wide while advancing one cell make them touch the following text. The others (`▲ • ⟳ → █ ░ ─`) have no emoji variant; `WPKGET_ASCII=1` remains the fallback if a font still misbehaves.
+- *Display-only version cleanup.* `ui.CleanVersion` strips prefixes such as `ipinfo-` for the table; `packages.yaml` keeps the real tag.
+- *Scope.* `check`, `list`, `show` and the rest keep the classic output; their tables use `text/tabwriter`, which would miscount ANSI escapes.
+
 **Move vs. copy:** `os.Rename` is attempted first (atomic on the same volume). If it fails (cross-volume), the tool falls back to copy + delete. This avoids a partial binary at the destination during the move.
 
 ---
@@ -217,6 +230,7 @@ Missing config file is not an error; defaults are used. When the default path is
 | `zipdown_url` | `""` | zipdown service URL; empty disables the feature |
 | `zipdown_token` | `""` | Bearer token for the zipdown service |
 | `user_agent` | `""` | Custom User-Agent for all HTTP requests |
+| `modern_term` | `false` | Modern terminal output for `install` and `update` (see "Modern output") |
 | `progress` | `auto` | Download progress bar: `auto`, `always` or `never` (see "Progress bar" under the install pipeline) |
 | `gitlab_hosts` | `{}` | Self-hosted GitLab instances, keyed by host (see [GitLab](#gitlab)) |
 | `pass_cmd` | `winpass` on Windows, `pass` elsewhere | pass-compatible binary used for `token_pass` lookups |
