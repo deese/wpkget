@@ -1,6 +1,7 @@
 // Package sysinternals resolves Sysinternals tools, which Microsoft publishes
-// as zips on download.sysinternals.com instead of GitHub releases. The tool's
-// Microsoft Learn page is the source of truth for its zip names, version and
+// as zips on download.sysinternals.com instead of GitHub releases. The
+// markdown source of the tool's Microsoft Learn page (MicrosoftDocs/sysinternals
+// on GitHub) is the source of truth for its zip names, version and
 // publication date.
 package sysinternals
 
@@ -22,7 +23,7 @@ const Provider = "sysinternals"
 
 // Both are variables so tests can point them at a local server.
 var (
-	pageBase     = "https://learn.microsoft.com/en-us/sysinternals/downloads"
+	docsBase     = "https://raw.githubusercontent.com/MicrosoftDocs/sysinternals/main/sysinternals/downloads"
 	downloadBase = "https://download.sysinternals.com/files"
 )
 
@@ -32,21 +33,21 @@ var (
 	// zipLinkRe captures the zip name of each download link. Only the name is
 	// used: the host is always downloadBase.
 	zipLinkRe = regexp.MustCompile(`https://download\.sysinternals\.com/files/([A-Za-z0-9_.-]+\.zip)`)
-	// versionRe captures the version from a heading such as "Autoruns v14.3".
-	versionRe = regexp.MustCompile(`<h1[^>]*>[^<]*?\sv(\d[\d.]*)\s*</h1>`)
-	// dateRe captures the publication date from the page metadata.
-	dateRe = regexp.MustCompile(`<meta name="ms\.date" content="(\d{4}-\d{2}-\d{2})`)
+	// versionRe captures the first version of the title, e.g. "# Autoruns v14.3".
+	versionRe = regexp.MustCompile(`(?m)^# .*?\sv(\d[\d.]*)`)
+	// dateRe captures the publication date of the front matter, written MM/DD/YYYY.
+	dateRe = regexp.MustCompile(`(?m)^ms\.date:\s*(\d{2})/(\d{2})/(\d{4})`)
 )
 
 // LatestRelease describes the current build of the tool named by repo, given as
 // "sysinternals/<tool>" where <tool> is the last segment of the tool's Learn
 // URL (e.g. "process-explorer", "pstools"); the owner is ignored and the case
 // does not matter. Sysinternals publishes no release metadata, so the tag is
-// "<version>-<date>" read from the page ("v14.3-2026-06-17"), or only the date
-// for pages without a version, and the assets are the zips the page links to.
+// "<version>-<date>" read from the page source ("v14.3-2026-06-17"), or only
+// the date for pages without a version, and the assets are the zips it links to.
 func LatestRelease(repo, userAgent string, debugHTTP bool) (*github.Release, error) {
 	slug := strings.ToLower(repo[strings.LastIndex(repo, "/")+1:])
-	pageURL := pageBase + "/" + slug
+	pageURL := docsBase + "/" + slug + ".md"
 
 	body, err := get(http.MethodGet, pageURL, userAgent, debugHTTP)
 	if err != nil {
@@ -56,12 +57,12 @@ func LatestRelease(repo, userAgent string, debugHTTP bool) (*github.Release, err
 
 	assets := zipAssets(page, userAgent, debugHTTP)
 	if len(assets) == 0 {
-		return nil, fmt.Errorf("sysinternals: no download link found on %s", pageURL)
+		return nil, fmt.Errorf("sysinternals: no download link found in %s", pageURL)
 	}
 
 	date := ""
 	if m := dateRe.FindStringSubmatch(page); m != nil {
-		date = m[1]
+		date = m[3] + "-" + m[1] + "-" + m[2]
 	}
 	tag := date
 	if m := versionRe.FindStringSubmatch(page); m != nil {
@@ -71,7 +72,7 @@ func LatestRelease(repo, userAgent string, debugHTTP bool) (*github.Release, err
 		}
 	}
 	if tag == "" {
-		return nil, fmt.Errorf("sysinternals: no version or date found on %s", pageURL)
+		return nil, fmt.Errorf("sysinternals: no version or date found in %s", pageURL)
 	}
 	return &github.Release{TagName: tag, Assets: assets}, nil
 }
@@ -90,7 +91,7 @@ func ReleaseByTag(repo, tag, userAgent string, debugHTTP bool) (*github.Release,
 	return release, nil
 }
 
-// zipAssets lists the distinct zips linked from page, in page order. The size
+// zipAssets lists the distinct zips linked from the page, in page order. The size
 // comes from a HEAD request and is left 0 when that fails.
 func zipAssets(page, userAgent string, debugHTTP bool) []github.Asset {
 	var assets []github.Asset

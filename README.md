@@ -155,12 +155,12 @@ packages:
     version: v17.2-2026-10-15
 ```
 
-The Learn page of the tool is the source of truth: wpkget reads from it the exact zip names (`ProcessExplorer.zip`, `PSTools.zip`), the version and the publication date. The tracked version is `v<version>-<date>` (for example `v17.2-2026-10-15`), or only the date for pages without a version, so a re-published zip is detected as an update too. When a page links several zips (the Suite), all are listed by `show` and `--match` selects one.
+The markdown source of the tool's Learn page (the `MicrosoftDocs/sysinternals` repository, read from `raw.githubusercontent.com`) is the source of truth: wpkget reads from it the exact zip names (`ProcessExplorer.zip`, `PSTools.zip`), the version and the publication date. The tracked version is `v<version>-<date>` (for example `v17.2-2026-10-15`), or only the date for pages without a version, so a re-published zip is detected as an update too. When a page links several zips (the Suite), all are listed by `show` and `--match` selects one.
 
 - Zips are extracted whole by default (`all` is implied), because they bundle the x86, x64 and ARM64 builds with the help file and the EULA. `--name` asks for a single binary and turns that off.
 - Only the current build is published: `get --tag` accepts the current `v<version>-<date>` and nothing older.
 - The size of each zip is verified. Sysinternals publishes no checksum and wpkget does not verify the Authenticode signature of the executables.
-- This relies on the HTML of the Learn page. If Microsoft changes it, the command fails with `no download link found` or `no version or date found`.
+- This relies on the layout of that markdown and on the `main` branch of a repository that is not wpkget's. If either changes, the command fails with `no download link found` or `no version or date found`. The same error appears for pages that are not downloadable tools (category pages) or whose tool was retired (`newsid`, `regmon`).
 
 ### GitLab
 
