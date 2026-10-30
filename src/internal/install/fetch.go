@@ -13,6 +13,7 @@ import (
 	"github.com/deese/wpkget/src/internal/asset"
 	"github.com/deese/wpkget/src/internal/github"
 	"github.com/deese/wpkget/src/internal/gitlab"
+	"github.com/deese/wpkget/src/internal/sysinternals"
 )
 
 // Release lookups, replaceable in tests so Fetch can run without network access.
@@ -23,8 +24,11 @@ var (
 
 // releaseByTag dispatches to the correct provider.
 func releaseByTag(provider, host, repo, tag, userAgent string, debugHTTP bool) (*github.Release, error) {
-	if provider == "gitlab" {
+	switch provider {
+	case "gitlab":
 		return gitlab.ReleaseByTag(host, repo, tag, userAgent, debugHTTP)
+	case sysinternals.Provider:
+		return sysinternals.ReleaseByTag(repo, tag, userAgent, debugHTTP)
 	}
 	return github.ReleaseByTag(repo, tag, userAgent, debugHTTP)
 }
@@ -98,6 +102,7 @@ func downloadTimed(opts Options, chosen *github.Asset, tmpDir string) (path stri
 // "<repo>-<tag>" subdirectory, and with NoExtract the downloaded file is kept
 // as is. Existing destinations are refused unless Force is set.
 func Fetch(opts Options) (*Result, error) {
+	opts = withProviderDefaults(opts)
 	release, err := resolveRelease(opts)
 	if err != nil {
 		return nil, err

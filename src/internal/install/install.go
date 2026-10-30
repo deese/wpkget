@@ -21,13 +21,14 @@ import (
 	"github.com/deese/wpkget/src/internal/asset"
 	"github.com/deese/wpkget/src/internal/github"
 	"github.com/deese/wpkget/src/internal/gitlab"
+	"github.com/deese/wpkget/src/internal/sysinternals"
 	"github.com/deese/wpkget/src/internal/zipdown"
 )
 
 // Options controls a single install run.
 type Options struct {
 	Repo       string
-	Provider   string // "github" (default) or "gitlab"
+	Provider   string // "github" (default), "gitlab" or "sysinternals"
 	Host       string // GitLab host (empty = gitlab.com)
 	BinDir     string
 	BinaryName string // optional: rename the installed .exe to this name (without extension)
@@ -59,8 +60,11 @@ var httpClient = &http.Client{}
 
 // latestRelease dispatches to the correct provider based on opts.Provider.
 func latestRelease(provider, host, repo, userAgent string, debugHTTP bool) (*github.Release, error) {
-	if provider == "gitlab" {
+	switch provider {
+	case "gitlab":
 		return gitlab.LatestRelease(host, repo, userAgent, debugHTTP)
+	case sysinternals.Provider:
+		return sysinternals.LatestRelease(repo, userAgent, debugHTTP)
 	}
 	return github.LatestRelease(repo, userAgent, debugHTTP)
 }
@@ -75,6 +79,7 @@ func dprint(enabled bool, format string, args ...any) {
 // Run executes the full install pipeline for a single repository:
 // resolve → download → decompress → move → cleanup.
 func Run(opts Options) (*Result, error) {
+	opts = withProviderDefaults(opts)
 	release, err := latestRelease(opts.Provider, opts.Host, opts.Repo, opts.UserAgent, opts.DebugHTTP)
 	if err != nil {
 		return nil, err
@@ -153,6 +158,16 @@ func Run(opts Options) (*Result, error) {
 	}
 
 	return &Result{Version: release.TagName, BinaryPath: dest, Size: dlSize, Duration: dlDur}, nil
+}
+
+// withProviderDefaults applies per-provider defaults. Sysinternals zips bundle
+// the x86, x64 and ARM64 builds with the help file and EULA, so they are
+// extracted whole unless a single binary is requested with BinaryName.
+func withProviderDefaults(opts Options) Options {
+	if opts.Provider == sysinternals.Provider && opts.BinaryName == "" {
+		opts.All = true
+	}
+	return opts
 }
 
 // sourceLabel describes where a release comes from, e.g. "github" or "gitlab git.example.com".

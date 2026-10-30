@@ -244,3 +244,15 @@ func TestSanitizeName(t *testing.T) {
 		t.Errorf("sanitizeName = %q", got)
 	}
 }
+
+func TestWithProviderDefaults(t *testing.T) {
+	if !withProviderDefaults(Options{Provider: "sysinternals"}).All {
+		t.Error("sysinternals must extract everything by default")
+	}
+	if withProviderDefaults(Options{Provider: "sysinternals", BinaryName: "x"}).All {
+		t.Error("--name asks for a single binary, so All must stay off")
+	}
+	if withProviderDefaults(Options{Provider: "github"}).All {
+		t.Error("other providers must be left alone")
+	}
+}
