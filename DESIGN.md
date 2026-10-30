@@ -19,6 +19,10 @@ wpkget/
 │       │   └── github.go        # GitHub Releases API client
 │       ├── gitlab/
 │       │   └── gitlab.go        # GitLab Releases API client, per-host token/TLS
+│       ├── sysinternals/
+│       │   └── sysinternals.go  # Sysinternals tools, resolved from their Microsoft Learn page
+│       ├── secret/
+│       │   └── secret.go        # pass/winpass lookups shared by github and gitlab
 │       ├── asset/
 │       │   └── asset.go         # asset selection heuristics
 │       ├── install/
@@ -52,7 +56,7 @@ Tags: `resolveRelease` asks for the exact tag and, on a not-found error, retries
 
 `config` has its own sub-subcommands (`open`, `path`, `check`, `show`; see [Configuration](#configuration)), implemented in `cmd/wpkget/config_cmd.go`.
 
-`install`, `url` and `show` accept `--provider github|gitlab` (default `github`). A repo argument may also be a full URL, in which case the provider (and, for GitLab, the host) is derived from it; see [GitLab](#gitlab).
+`install`, `get`, `url` and `show` accept `--provider github|gitlab|sysinternals` (default `github`). A repo argument may also be a full URL, in which case the provider (and, for GitLab, the host) is derived from it; see [GitLab](#gitlab). The `sysinternals` provider is never inferred from the repo name, because a GitHub organization called `sysinternals` exists.
 
 Global flags (`--config`, `--bin-dir`, `--user-agent`, `--dry-run`, `--verbose`, `--debug`, `--debug-http`) are parsed before the subcommand is dispatched.
 
@@ -68,7 +72,9 @@ GET https://api.github.com/repos/{owner}/{repo}/releases/latest
 
 The response is decoded into a minimal struct containing only the fields we need: `tag_name` and the `assets` array (each asset has `name` and `browser_download_url`).
 
-**Authentication:** The GitHub API allows 60 unauthenticated requests per hour per IP. wpkget does not require a token but will read one from the `GITHUB_TOKEN` environment variable and attach it as a `Bearer` header when present. This raises the limit to 5 000 requests/hour and avoids rate-limit errors in CI or heavy-use scenarios.
+**Authentication:** The GitHub API allows 60 unauthenticated requests per hour per IP. wpkget does not require a token but attaches one as a `Bearer` header when available, which raises the limit to 5 000 requests/hour. The token comes from the environment variable named by `github.token_env` (default `GITHUB_TOKEN`) and, when that is unset or empty, from the pass/winpass entry `github.token_pass` via `secret.FromPass` (the same lookup as GitLab's `token_pass`: no shell, stdin/stderr inherited, entries starting with `-` rejected).
+
+`github.Configure` is called once at startup. The lookup is lazy and guarded by a `sync.Once`, so `pass` is only invoked, and may only prompt, when the first request reaches the API, and commands that never call it (`list`, `config show`) never trigger it. A failed `token_pass` lookup is cached and returned as an error for every request instead of degrading to anonymous requests: a misspelled entry should not go unnoticed. The token is only attached in `fetchRelease`, so it never reaches asset downloads.
 
 **HTTP client:** `net/http` default client with a 30-second timeout. No retries — a failed network call surfaces as a clear error; the user can re-run.
 
@@ -101,6 +107,34 @@ Assets are the release's `assets.links` (name + URL). Source archives are ignore
 **Token handling.** Sessions (HTTP client + token) are resolved lazily and cached per host. The token is sent as `PRIVATE-TOKEN` only to the host it belongs to: `gitlab.Prepare` attaches it to API calls and to asset downloads whose URL host is known, and the client's `CheckRedirect` removes the header when a redirect leaves the original host (e.g. an object storage backend), because Go would otherwise copy custom headers across hosts. Unconfigured hosts never receive credentials. For gitlab.com the `GITLAB_TOKEN` variable is used; it is never sent to self-hosted instances.
 
 **Limitations.** HTTPS only; no `http://` instances. The zipdown service receives the asset URL without credentials, so bare `.exe` assets of private GitLab projects cannot be wrapped. Tracked packages are keyed by `repo`, so the same `group/project` on two hosts collides.
+
+---
+
+## Sysinternals
+
+Sysinternals tools are zips on `download.sysinternals.com/files/<Name>.zip`, with no release metadata and no API. `internal/sysinternals` builds a `github.Release` from the tool's Microsoft Learn page, so asset selection and the install pipeline are unchanged. The provider is chosen in `install.latestRelease` and `install.releaseByTag`, and in `show`.
+
+```
+GET https://learn.microsoft.com/en-us/sysinternals/downloads/{slug}
+HEAD https://download.sysinternals.com/files/{Name}.zip      (once per linked zip)
+```
+
+The repo is `sysinternals/<slug>` where `<slug>` is the last segment of the Learn URL (`process-explorer`); it is lowercased and the owner is ignored. The page gives:
+
+| Data | Source |
+|------|--------|
+| Zip names | every `https://download.sysinternals.com/files/<name>.zip` link, in page order, deduplicated. Only the name is kept: the download URL is always built on `download.sysinternals.com`, so a link to another host on the page is never followed. |
+| Version | the `<h1>` heading, e.g. `Autoruns v14.3`. Absent on some pages (the Suite, PSTools). |
+| Date | the `ms.date` metadata. |
+| Size | `Content-Length` of the `HEAD` request, left 0 when it fails. |
+
+Why the page and not the zip alone: the zip names are case-sensitive on the server and do not follow a rule that can be derived from the slug (`PSTools`, `TCPView`, `ProcessExplorer`), and the page is the only place that carries the version number. The `Last-Modified` header of the zip would give a date, but not the name.
+
+**Tag.** `v<version>-<date>` (`v17.2-2026-10-15`), or the date alone when there is no version. Including the date makes a zip re-published without a version bump count as an update. `ReleaseByTag` returns the current build when the tag matches and `ErrNotFound` otherwise: older builds are not published.
+
+**Defaults.** `install.withProviderDefaults` turns `All` on for this provider unless `BinaryName` is set. These zips bundle x86/x64/ARM64 executables, the help file and the EULA, so picking one executable is almost always wrong, while `--name` is an explicit request for a single binary. It is applied in `Run` and `Fetch`; the stored entry keeps whatever the user passed.
+
+**Limitations.** It depends on the HTML of a Microsoft page, so a redesign makes it fail with `no download link found` or `no version or date found` rather than guess. Sysinternals publishes no checksum, so integrity rests on TLS and the size check; the Authenticode signature of the executables is not verified. Each resolution costs one `GET` plus one `HEAD` per linked zip.
 
 ---
 
@@ -207,7 +241,7 @@ Schema:
 ```yaml
 packages:
   - repo: owner/name
-    provider: gitlab           # optional: "github" (default) or "gitlab"
+    provider: gitlab           # optional: "github" (default), "gitlab" or "sysinternals"
     host: git.example.com      # optional: self-hosted GitLab host (omitted for gitlab.com)
     version: "v1.2.3"
     binary_name: custom-name   # optional: installed .exe name (without extension)
@@ -236,6 +270,7 @@ Missing config file is not an error; defaults are used. When the default path is
 | `user_agent` | `""` | Custom User-Agent for all HTTP requests |
 | `modern_term` | `false` | Modern terminal output for `install` and `update` (see "Modern output") |
 | `progress` | `auto` | Download progress bar: `auto`, `always` or `never` (see "Progress bar" under the install pipeline) |
+| `github` | `{}` | GitHub API credentials: `token_env` (default `GITHUB_TOKEN`) and `token_pass` (see [GitHub Releases API](#github-releases-api)) |
 | `gitlab_hosts` | `{}` | Self-hosted GitLab instances, keyed by host (see [GitLab](#gitlab)) |
 | `pass_cmd` | `winpass` on Windows, `pass` elsewhere | pass-compatible binary used for `token_pass` lookups |
 

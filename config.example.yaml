@@ -10,3 +10,10 @@ bin_dir: "C:\\tools\\bin"
 # When set, bare .exe assets are wrapped through the service before install.
 zipdown_url: ""
 zipdown_token: ""
+
+# GitHub API token (optional): lifts the anonymous limit of 60 requests per hour.
+# Read from the environment variable first, then from the pass entry (first line).
+# github:
+#   token_env: GITHUB_TOKEN     # default
+#   token_pass: github/wpkget   # pass/winpass entry, see pass_cmd
+# pass_cmd: winpass

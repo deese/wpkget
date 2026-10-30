@@ -1,6 +1,6 @@
 # wpkget
 
-A minimal package manager that pulls compiled binaries directly from GitHub and GitLab releases (gitlab.com and self-hosted instances). It targets Windows first and also builds for Linux and macOS.
+A minimal package manager that pulls compiled binaries directly from GitHub and GitLab releases (gitlab.com and self-hosted instances) and Sysinternals tools. It targets Windows first and also builds for Linux and macOS.
 
 ## Installation
 
@@ -49,6 +49,10 @@ progress: auto
 # Off by default; override per run with --modern / --no-modern.
 modern_term: false
 
+# Optional: GitHub API token (see "GitHub token" below).
+github:
+  token_pass: github/wpkget
+
 # Optional: self-hosted GitLab instances (see "GitLab" below).
 gitlab_hosts:
   git.example.com:
@@ -64,7 +68,7 @@ Download and install the latest release of a GitHub or GitLab repository.
 
 ```
 wpkget install <user/repo> [...]
-         [--provider <p>]     source provider: github (default) or gitlab
+         [--provider <p>]     source provider: github (default), gitlab or sysinternals
          [--name <binary>]    rename the installed binary (single repo only)
          [--match <pattern>]  glob to select the release asset
          [--all]              copy all archive contents to bin-dir
@@ -97,7 +101,7 @@ wpkget get <user/repo> [...]
          [--all]              extract the whole archive into <repo>-<tag>/
          [--no-extract]       keep the downloaded file as is
          [--force]            overwrite an existing destination
-         [--provider/-p <p>]  source provider: github (default) or gitlab
+         [--provider/-p <p>]  source provider: github (default), gitlab or sysinternals
 ```
 
 Examples:
@@ -115,6 +119,48 @@ The path of what was written is printed on stdout and nothing else, so it can be
 - An existing destination is refused before anything is downloaded, unless `--force` is given. With `--all` a directory that exists and is empty is accepted.
 - The same checks as `install` apply: size and SHA-256 verification, timeouts, and your proxy's own inspection.
 - It does not replace running programs. To update wpkget itself, `get` the new binary and swap it manually: `wpkget get deese/wpkget` leaves `wpkget.exe` in the current directory. If that is the running binary, Windows will normally refuse to overwrite it even with `--force`, so run it from another directory or use `--out`.
+
+### GitHub token
+
+Anonymous requests to the GitHub API are limited to 60 per hour, which a long package list exhausts (`HTTP 403`, "API rate limit exceeded"). A token raises the limit to 5 000 per hour. It needs no scopes for public repositories.
+
+```yaml
+github:
+  token_env: GITHUB_TOKEN       # environment variable holding the token (this is the default)
+  token_pass: github/wpkget     # or a pass/winpass entry (first line is used)
+pass_cmd: winpass               # defaults to winpass on Windows, pass elsewhere
+```
+
+The environment variable is checked first, then the `pass` entry (`<pass_cmd> show <entry>`). With `winpass`: `winpass insert github/wpkget`, then set `token_pass` as above.
+
+- The lookup is lazy and runs once per run, so `pass` is only invoked (and may prompt for a passphrase) when a request actually reaches the API.
+- If `token_pass` is set but the lookup fails, the command fails instead of silently falling back to anonymous requests.
+- The token is only sent to `api.github.com`, never to asset downloads.
+- `pass_cmd` is looked up in `PATH`; use an absolute path (`pass_cmd: C:\Users\you\bin\winpass.exe`) if that is not reliable in your environment.
+
+### Sysinternals
+
+Sysinternals tools are published as zips on `download.sysinternals.com`, not as GitHub releases. Use `--provider sysinternals` and the last segment of the tool's Microsoft Learn URL (`learn.microsoft.com/sysinternals/downloads/<tool>`) as the repo; the owner is ignored and the case does not matter.
+
+```
+wpkget install --provider sysinternals sysinternals/process-explorer
+wpkget install -p sysinternals sysinternals/autoruns sysinternals/pstools
+wpkget show -p sysinternals sysinternals/sysinternals-suite
+```
+
+```yaml
+packages:
+  - repo: sysinternals/process-explorer
+    provider: sysinternals
+    version: v17.2-2026-10-15
+```
+
+The Learn page of the tool is the source of truth: wpkget reads from it the exact zip names (`ProcessExplorer.zip`, `PSTools.zip`), the version and the publication date. The tracked version is `v<version>-<date>` (for example `v17.2-2026-10-15`), or only the date for pages without a version, so a re-published zip is detected as an update too. When a page links several zips (the Suite), all are listed by `show` and `--match` selects one.
+
+- Zips are extracted whole by default (`all` is implied), because they bundle the x86, x64 and ARM64 builds with the help file and the EULA. `--name` asks for a single binary and turns that off.
+- Only the current build is published: `get --tag` accepts the current `v<version>-<date>` and nothing older.
+- The size of each zip is verified. Sysinternals publishes no checksum and wpkget does not verify the Authenticode signature of the executables.
+- This relies on the HTML of the Learn page. If Microsoft changes it, the command fails with `no download link found` or `no version or date found`.
 
 ### GitLab
 
@@ -162,7 +208,7 @@ Print the resolved download URL without downloading anything.
 
 ```
 wpkget url <repo> [...]
-         [--provider <p>]     source provider: github (default) or gitlab
+         [--provider <p>]     source provider: github (default), gitlab or sysinternals
 ```
 
 ### Show package details
@@ -171,7 +217,7 @@ Print the provider, latest release, tracking status (version, per-package option
 
 ```
 wpkget show <repo> [...]
-         [--provider <p>]     source provider: github (default) or gitlab
+         [--provider <p>]     source provider: github (default), gitlab or sysinternals
 ```
 
 Example output:
@@ -264,6 +310,9 @@ packages:
     provider: gitlab
     host: git.example.com        # omitted for github.com and gitlab.com
     version: "v1.2.3"
+  - repo: sysinternals/process-explorer
+    provider: sysinternals
+    version: v17.2-2026-10-15
 ```
 
 The file is updated automatically after each successful install or update.
