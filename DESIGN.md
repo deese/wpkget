@@ -20,7 +20,7 @@ wpkget/
 │       ├── gitlab/
 │       │   └── gitlab.go        # GitLab Releases API client, per-host token/TLS
 │       ├── sysinternals/
-│       │   └── sysinternals.go  # Sysinternals tools, resolved from their Microsoft Learn page
+│       │   └── sysinternals.go  # Sysinternals tools, resolved from the markdown source of their Learn page
 │       ├── secret/
 │       │   └── secret.go        # pass/winpass lookups shared by github and gitlab
 │       ├── asset/
@@ -112,29 +112,29 @@ Assets are the release's `assets.links` (name + URL). Source archives are ignore
 
 ## Sysinternals
 
-Sysinternals tools are zips on `download.sysinternals.com/files/<Name>.zip`, with no release metadata and no API. `internal/sysinternals` builds a `github.Release` from the tool's Microsoft Learn page, so asset selection and the install pipeline are unchanged. The provider is chosen in `install.latestRelease` and `install.releaseByTag`, and in `show`.
+Sysinternals tools are zips on `download.sysinternals.com/files/<Name>.zip`, with no release metadata and no API. `internal/sysinternals` builds a `github.Release` from the markdown source of the tool's Microsoft Learn page, so asset selection and the install pipeline are unchanged. The provider is chosen in `install.latestRelease` and `install.releaseByTag`, and in `show`.
 
 ```
-GET https://learn.microsoft.com/en-us/sysinternals/downloads/{slug}
+GET https://raw.githubusercontent.com/MicrosoftDocs/sysinternals/main/sysinternals/downloads/{slug}.md
 HEAD https://download.sysinternals.com/files/{Name}.zip      (once per linked zip)
 ```
 
-The repo is `sysinternals/<slug>` where `<slug>` is the last segment of the Learn URL (`process-explorer`); it is lowercased and the owner is ignored. The page gives:
+The repo is `sysinternals/<slug>` where `<slug>` is the last segment of the Learn URL (`process-explorer`), which is also the file name in the `MicrosoftDocs/sysinternals` repository. It is lowercased (the file names are lowercase and the path is case-sensitive) and the owner is ignored. The markdown gives:
 
 | Data | Source |
 |------|--------|
-| Zip names | every `https://download.sysinternals.com/files/<name>.zip` link, in page order, deduplicated. Only the name is kept: the download URL is always built on `download.sysinternals.com`, so a link to another host on the page is never followed. |
-| Version | the `<h1>` heading, e.g. `Autoruns v14.3`. Absent on some pages (the Suite, PSTools). |
-| Date | the `ms.date` metadata. |
+| Zip names | every `https://download.sysinternals.com/files/<name>.zip` link, in file order, deduplicated. Only the name is kept: the download URL is always built on `download.sysinternals.com`, so a link to another host in the file is never followed. |
+| Version | the first `v<n.n>` of the `# ` title, e.g. `# Autoruns v14.3`. Absent on some pages (the Suite, PSTools); when the title has two (`PendMoves v1.3 and MoveFile v1.02`) the first is used. |
+| Date | the `ms.date` front matter, written `MM/DD/YYYY` and converted to `YYYY-MM-DD`. |
 | Size | `Content-Length` of the `HEAD` request, left 0 when it fails. |
 
-Why the page and not the zip alone: the zip names are case-sensitive on the server and do not follow a rule that can be derived from the slug (`PSTools`, `TCPView`, `ProcessExplorer`), and the page is the only place that carries the version number. The `Last-Modified` header of the zip would give a date, but not the name.
+Why this and not the zip alone: the zip names are case-sensitive on the server and do not follow a rule that can be derived from the slug (`PSTools`, `TCPView`, `ProcessExplorer`, `pendmoves.zip`), and the page is the only place that carries the version number. The `Last-Modified` header of the zip would give a date, but not the name. The markdown is the file the Learn page is generated from, with the same data as the rendered HTML but without markup to parse. Checked against the 88 files linked from the repository's `toc.yml`: all 76 that link a zip resolve; the others are category pages and retired or non-zip tools.
 
 **Tag.** `v<version>-<date>` (`v17.2-2026-10-15`), or the date alone when there is no version. Including the date makes a zip re-published without a version bump count as an update. `ReleaseByTag` returns the current build when the tag matches and `ErrNotFound` otherwise: older builds are not published.
 
 **Defaults.** `install.withProviderDefaults` turns `All` on for this provider unless `BinaryName` is set. These zips bundle x86/x64/ARM64 executables, the help file and the EULA, so picking one executable is almost always wrong, while `--name` is an explicit request for a single binary. It is applied in `Run` and `Fetch`; the stored entry keeps whatever the user passed.
 
-**Limitations.** It depends on the HTML of a Microsoft page, so a redesign makes it fail with `no download link found` or `no version or date found` rather than guess. Sysinternals publishes no checksum, so integrity rests on TLS and the size check; the Authenticode signature of the executables is not verified. Each resolution costs one `GET` plus one `HEAD` per linked zip.
+**Limitations.** It depends on the layout of a markdown file and on the `main` branch of a repository wpkget does not control, so a restructuring (or moving the repository) makes it fail with `no download link found` or `no version or date found` rather than guess. The same errors appear for category pages and for retired tools. Sysinternals publishes no checksum, so integrity rests on TLS and the size check; the Authenticode signature of the executables is not verified. Each resolution costs one `GET` plus one `HEAD` per linked zip. The repository's `toc.yml` lists the tools but carries no zip name, version or date, so it is not used to resolve them.
 
 ---
 

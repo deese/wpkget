@@ -10,37 +10,57 @@ import (
 	"github.com/deese/wpkget/src/internal/github"
 )
 
-const explorerPage = `<meta name="ms.date" content="2026-10-15T00:00:00Z" />
-<div class="content"><h1 id="process-explorer-v172">Process Explorer v17.2</h1></div>
-<p>Published: October 15, 2026</p>
-<p><a href="https://download.sysinternals.com/files/ProcessExplorer.zip">Download</a>
-<a href="https://download.sysinternals.com/files/ProcessExplorer.zip">again</a></p>`
+const explorerDoc = `---
+title: Process Explorer
+ms.date: 10/15/2026
+---
 
-const suitePage = `<meta name="ms.date" content="2026-09-01T00:00:00Z" />
-<h1 id="sysinternals-suite">Sysinternals Suite</h1>
-<a href="https://download.sysinternals.com/files/SysinternalsSuite.zip">x64</a>
-<a href="https://download.sysinternals.com/files/SysinternalsSuite-ARM64.zip">arm64</a>`
+# Process Explorer v17.2
+
+Published: October 15, 2026
+
+[![Download](media/shared/Download_sm.png)](https://download.sysinternals.com/files/ProcessExplorer.zip) [**Download Process Explorer**](https://download.sysinternals.com/files/ProcessExplorer.zip)`
+
+const suiteDoc = `---
+ms.date: 09/01/2026
+---
+
+# Sysinternals Suite
+
+[x64](https://download.sysinternals.com/files/SysinternalsSuite.zip)
+[arm64](https://download.sysinternals.com/files/SysinternalsSuite-ARM64.zip)`
+
+const pendMovesDoc = `---
+ms.date: 09/17/2020
+---
+
+# PendMoves v1.3 and MoveFile v1.02
+
+[Download](https://download.sysinternals.com/files/PendMove.zip)`
 
 func newServer(t *testing.T) {
 	t.Helper()
+	docs := map[string]string{
+		"/docs/process-explorer.md":   explorerDoc,
+		"/docs/sysinternals-suite.md": suiteDoc,
+		"/docs/pendmoves.md":          pendMovesDoc,
+		"/docs/empty.md":              "# Nothing here v1.0\n",
+	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/pages/process-explorer":
-			w.Write([]byte(explorerPage))
-		case r.Method == http.MethodGet && r.URL.Path == "/pages/sysinternals-suite":
-			w.Write([]byte(suitePage))
-		case r.Method == http.MethodGet && r.URL.Path == "/pages/empty":
-			w.Write([]byte("<h1>Nothing here v1.0</h1>"))
-		case r.Method == http.MethodHead && r.URL.Path == "/files/ProcessExplorer.zip":
-			w.Header().Set("Content-Length", "3813190")
-		default:
-			http.NotFound(w, r)
+		if doc, ok := docs[r.URL.Path]; ok && r.Method == http.MethodGet {
+			w.Write([]byte(doc))
+			return
 		}
+		if r.Method == http.MethodHead && r.URL.Path == "/files/ProcessExplorer.zip" {
+			w.Header().Set("Content-Length", "3813190")
+			return
+		}
+		http.NotFound(w, r)
 	}))
 	t.Cleanup(srv.Close)
-	oldPage, oldDownload := pageBase, downloadBase
-	pageBase, downloadBase = srv.URL+"/pages", srv.URL+"/files"
-	t.Cleanup(func() { pageBase, downloadBase = oldPage, oldDownload })
+	oldDocs, oldDownload := docsBase, downloadBase
+	docsBase, downloadBase = srv.URL+"/docs", srv.URL+"/files"
+	t.Cleanup(func() { docsBase, downloadBase = oldDocs, oldDownload })
 }
 
 func TestLatestRelease(t *testing.T) {
@@ -77,6 +97,18 @@ func TestLatestReleaseWithoutVersion(t *testing.T) {
 	}
 	if rel.Assets[0].Size != 0 {
 		t.Errorf("size must be 0 when HEAD fails, got %d", rel.Assets[0].Size)
+	}
+}
+
+func TestLatestReleaseFirstVersionOfTitle(t *testing.T) {
+	newServer(t)
+
+	rel, err := LatestRelease("sysinternals/pendmoves", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rel.TagName != "v1.3-2020-09-17" {
+		t.Errorf("tag = %q, want the first version of the title", rel.TagName)
 	}
 }
 
