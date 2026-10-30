@@ -1,6 +1,7 @@
 package gitlab
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -10,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/deese/wpkget/src/internal/config"
+	"github.com/deese/wpkget/src/internal/github"
 )
 
 const releasesJSON = `[{"tag_name":"v1.2.3","assets":{"links":[{"name":"tool.zip","url":"https://example.com/tool.zip"}]}}]`
@@ -193,5 +195,35 @@ func TestPrefix(t *testing.T) {
 	}
 	if got := TrimPrefix(host, "grp/proj"); got != "grp/proj" {
 		t.Fatalf("TrimPrefix without prefix = %q", got)
+	}
+}
+
+func TestReleaseByTag(t *testing.T) {
+	var gotPath string
+	srv, caPath := newTLSServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.EscapedPath()
+		if strings.HasSuffix(gotPath, "/releases/v9.9.9") {
+			http.NotFound(w, r)
+			return
+		}
+		w.Write([]byte(`{"tag_name":"v1.0.0","assets":{"links":[{"name":"tool.zip","url":"https://example.com/tool.zip"}]}}`))
+	}))
+	host := hostOf(t, srv)
+	Configure(&config.Config{GitLabHosts: map[string]config.GitLabHost{host: {CAFile: caPath}}})
+
+	rel, err := ReleaseByTag(host, "grp/sub/proj", "v1.0.0", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "/api/v4/projects/grp%2Fsub%2Fproj/releases/v1.0.0"; gotPath != want {
+		t.Fatalf("path = %q, want %q", gotPath, want)
+	}
+	if rel.TagName != "v1.0.0" || len(rel.Assets) != 1 {
+		t.Fatalf("unexpected release: %+v", rel)
+	}
+
+	_, err = ReleaseByTag(host, "grp/sub/proj", "v9.9.9", "", false)
+	if !errors.Is(err, github.ErrNotFound) {
+		t.Fatalf("a missing tag must match ErrNotFound, got %v", err)
 	}
 }

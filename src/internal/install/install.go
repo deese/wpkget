@@ -31,8 +31,11 @@ type Options struct {
 	Host       string // GitLab host (empty = gitlab.com)
 	BinDir     string
 	BinaryName string // optional: rename the installed .exe to this name (without extension)
+	Tag        string // Fetch: release tag to download; empty means the latest release
 	Match      string // optional: glob pattern to select the release asset (e.g. "*windows-amd64*.zip")
 	All        bool   // when true, copy all archive contents to BinDir instead of extracting a single .exe
+	NoExtract  bool   // Fetch: keep the downloaded file as is instead of extracting it
+	Force      bool   // Fetch: overwrite an existing destination
 	DryRun     bool
 	Verbose    bool
 	Debug      bool            // enable step-by-step diagnostic output
@@ -77,18 +80,12 @@ func Run(opts Options) (*Result, error) {
 		return nil, err
 	}
 
-	repoName := repoBaseName(opts.Repo)
-	if opts.Verbose {
-		log.Printf("release: %s %s (%s)", opts.Repo, release.TagName, sourceLabel(opts.Provider, opts.Host))
-	}
-	chosen, err := asset.Select(release.Assets, repoName, opts.Match, opts.Verbose)
+	chosen, err := pickAsset(opts, release)
 	if err != nil {
 		return nil, err
 	}
-	if opts.Verbose {
-		log.Printf("asset: url %s", chosen.BrowserDownloadURL)
-	}
 
+	repoName := repoBaseName(opts.Repo)
 	destName := resolveDestName(opts.BinaryName, repoName)
 
 	if opts.DryRun {
@@ -117,17 +114,10 @@ func Run(opts Options) (*Result, error) {
 	}()
 
 	// Download the asset (or let zipdown wrap a bare .exe).
-	dlStart := time.Now()
-	archivePath, err := download(opts, chosen, tmpDir)
+	archivePath, dlSize, dlDur, err := downloadTimed(opts, chosen, tmpDir)
 	if err != nil {
 		return nil, err
 	}
-	dlDur := time.Since(dlStart)
-	var dlSize int64
-	if info, err := os.Stat(archivePath); err == nil {
-		dlSize = info.Size()
-	}
-	dprint(opts.Debug, "debug: downloaded archive → %s", archivePath)
 
 	// Ensure the destination directory exists.
 	if err := os.MkdirAll(opts.BinDir, 0o755); err != nil {

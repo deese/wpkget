@@ -173,6 +173,8 @@ func main() {
 		os.Exit(runRemove(rest))
 	case "url":
 		os.Exit(runURL(rest))
+	case "get":
+		os.Exit(runGet(rest))
 	case "config":
 		os.Exit(runConfig(rest))
 	case "show":
@@ -831,6 +833,14 @@ Commands:
                                (e.g. --match "*windows-amd64*.zip")
            [--all]             copy all archive contents (files + folders) to bin-dir
            [--bin-dir <path>]  destination directory for this package (saved per-package)
+  get     <repo> [...]         download a release without installing or tracking it
+           [--tag/-t <tag>]    release tag (default: the latest release)
+           [--out/-o <dir>]    output directory (default: current directory)
+           [--match <pattern>] glob pattern to select the release asset
+           [--name <binary>]   name for the extracted binary (single repo only)
+           [--all]             extract everything into <repo>-<tag>/
+           [--no-extract]      keep the downloaded file as is
+           [--force]           overwrite an existing destination
   update  [<repo> ...]         update all tracked packages, or only the given ones
   list    [-v]                 list tracked packages and their versions
                                -v: include resolved download URL

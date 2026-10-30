@@ -44,7 +44,11 @@ All packages under `internal/` are unexported to keep the public surface minimal
 
 The entry point uses the standard `flag` package with subcommand dispatch. No third-party CLI framework is used — the command set is small enough that the standard library suffices and avoids dependency bloat.
 
-Subcommands: `install`, `update`, `check`, `list`, `remove`, `url`, `show`, `config`.
+Subcommands: `install`, `get`, `update`, `check`, `list`, `remove`, `url`, `show`, `config`.
+
+`get` (in `cmd/wpkget/get_cmd.go`, backed by `install.Fetch`) is a one-off download: same resolve → select → download → verify → extract pipeline as `install`, but the result stays in `--out` (default: the current directory), `bin_dir` and `packages.yaml` are never touched, and `--tag` can pin a release. Design points: `Fetch` shares `pickAsset` and `downloadTimed` with `Run`, so asset selection, `--match`, the `Feedback` seam, timeouts and integrity checks behave identically; the destination is checked *before* downloading (a collision should not cost a 100 MB transfer), refusing existing files unless `--force`; `--all` extracts into `<repo>-<tag>/` instead of flat, because unlike `install --all` the target is an arbitrary working directory and dumping an archive's files into it would be hostile; stdout carries only the final path so it composes in scripts, with notices and the progress bar on stderr. It deliberately has no self-replacement logic: updating wpkget itself means fetching the new binary and swapping it by hand, which avoids the download-and-overwrite-self behavior that endpoint antivirus heuristics treat as suspicious.
+
+Tags: `resolveRelease` asks for the exact tag and, on a not-found error, retries with the `v` prefix toggled. Both providers return a `github.ErrNotFound`-matching error for HTTP 404 (`github.NewNotFound`), so the retry does not depend on provider-specific messages. Endpoints: `GET /repos/{repo}/releases/tags/{tag}` (GitHub) and `GET /projects/{id}/releases/{tag}` (GitLab, tag URL-encoded).
 
 `config` has its own sub-subcommands (`open`, `path`, `check`, `show`; see [Configuration](#configuration)), implemented in `cmd/wpkget/config_cmd.go`.
 

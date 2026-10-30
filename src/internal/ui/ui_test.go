@@ -223,3 +223,27 @@ func TestDetect(t *testing.T) {
 		t.Error("NO_COLOR must disable colors")
 	}
 }
+
+func TestDownloadedRowIsNotCountedAsUpdate(t *testing.T) {
+	out := render(Options{}, []Result{
+		{Repo: "cli/cli", New: "v2.68.1", Status: Downloaded, Size: 12 << 20, Dur: 3 * time.Second},
+	})
+	if !strings.Contains(out, "↓ cli/cli") || !strings.Contains(out, "v2.68.1") || !strings.Contains(out, "12.0 MiB") {
+		t.Fatalf("unexpected row:\n%s", out)
+	}
+	if !strings.Contains(out, "0 updated") {
+		t.Fatalf("a one-off download must not count as an update:\n%s", out)
+	}
+	if ascii := render(Options{ASCII: true}, []Result{{Repo: "a/b", New: "v1", Status: Downloaded}}); strings.Contains(ascii, "↓") {
+		t.Errorf("ASCII output must not contain the Unicode arrow:\n%s", ascii)
+	}
+}
+
+func TestNote(t *testing.T) {
+	var buf bytes.Buffer
+	u := newUI(&buf, Options{})
+	u.Note(`d:\tools\tool.exe`)
+	if got := buf.String(); !strings.Contains(got, `d:\tools\tool.exe`) || !strings.HasSuffix(got, "\n") {
+		t.Fatalf("got %q", got)
+	}
+}

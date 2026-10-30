@@ -100,19 +100,48 @@ func LatestRelease(host, repo, userAgent string, debugHTTP bool) (*github.Releas
 	}
 	apiURL := fmt.Sprintf("https://%s%s/api/v4/projects/%s/releases?per_page=1", host, hostPrefix(host), url.PathEscape(repo))
 
+	var releases []releaseJSON
+	notFound := fmt.Sprintf("gitlab: repository %q not found or has no releases", repo)
+	if err := getJSON(host, apiURL, repo, notFound, userAgent, debugHTTP, &releases); err != nil {
+		return nil, err
+	}
+	if len(releases) == 0 {
+		return nil, fmt.Errorf("gitlab: repository %q has no releases", repo)
+	}
+	return toRelease(releases[0]), nil
+}
+
+// ReleaseByTag fetches the release published for the given tag.
+func ReleaseByTag(host, repo, tag, userAgent string, debugHTTP bool) (*github.Release, error) {
+	if host == "" {
+		host = DefaultHost
+	}
+	apiURL := fmt.Sprintf("https://%s%s/api/v4/projects/%s/releases/%s", host, hostPrefix(host), url.PathEscape(repo), url.PathEscape(tag))
+
+	var r releaseJSON
+	notFound := fmt.Sprintf("gitlab: no release with tag %q in %q", tag, repo)
+	if err := getJSON(host, apiURL, repo, notFound, userAgent, debugHTTP, &r); err != nil {
+		return nil, err
+	}
+	return toRelease(r), nil
+}
+
+// getJSON GETs apiURL with the credentials and TLS settings of host and
+// decodes the JSON body into out. notFound is the message used for HTTP 404.
+func getJSON(host, apiURL, repo, notFound, userAgent string, debugHTTP bool, out any) error {
 	req, err := http.NewRequest(http.MethodGet, apiURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("gitlab: build request: %w", err)
+		return fmt.Errorf("gitlab: build request: %w", err)
 	}
 	if userAgent != "" {
 		req.Header.Set("User-Agent", userAgent)
 	}
 	client, err := Prepare(req)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if client == nil {
-		return nil, fmt.Errorf("gitlab: host %q is not configured (add it to gitlab_hosts)", host)
+		return fmt.Errorf("gitlab: host %q is not configured (add it to gitlab_hosts)", host)
 	}
 
 	if debugHTTP {
@@ -126,29 +155,26 @@ func LatestRelease(host, repo, userAgent string, debugHTTP bool) (*github.Releas
 		log.Printf("debug-http: response:\n%s", dump)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("gitlab: request failed: %w", err)
+		return fmt.Errorf("gitlab: request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotFound {
-		return nil, fmt.Errorf("gitlab: repository %q not found or has no releases", repo)
+		return github.NewNotFound(notFound)
 	}
 	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
-		return nil, fmt.Errorf("gitlab: access denied by %s, check the token (HTTP %d)", host, resp.StatusCode)
+		return fmt.Errorf("gitlab: access denied by %s, check the token (HTTP %d)", host, resp.StatusCode)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("gitlab: unexpected status %d for %s", resp.StatusCode, repo)
+		return fmt.Errorf("gitlab: unexpected status %d for %s", resp.StatusCode, repo)
 	}
+	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		return fmt.Errorf("gitlab: decode response: %w", err)
+	}
+	return nil
+}
 
-	var releases []releaseJSON
-	if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
-		return nil, fmt.Errorf("gitlab: decode response: %w", err)
-	}
-	if len(releases) == 0 {
-		return nil, fmt.Errorf("gitlab: repository %q has no releases", repo)
-	}
-
-	r := releases[0]
+func toRelease(r releaseJSON) *github.Release {
 	release := &github.Release{
 		TagName: r.TagName,
 		Assets:  make([]github.Asset, 0, len(r.Assets.Links)),
@@ -159,7 +185,7 @@ func LatestRelease(host, repo, userAgent string, debugHTTP bool) (*github.Releas
 			BrowserDownloadURL: link.URL,
 		})
 	}
-	return release, nil
+	return release
 }
 
 // sessionFor returns the cached session for host, building it on first use.

@@ -84,6 +84,38 @@ wpkget install https://gitlab.com/group/project
 wpkget selects the release asset built for your operating system and architecture, among files ending in `.zip`, `.tar.gz`, `.gz` or `.exe` (and bare extensionless binaries on Linux and macOS). Use `--match` when the choice is ambiguous; `wpkget show <repo>` lists the available assets, and `--verbose` prints how the choice was made.
 The binary is extracted (if compressed) and moved to `bin_dir`. The archive is deleted afterward.
 
+### Download a release without installing it
+
+`get` is a one-off download: it resolves, downloads, verifies and extracts a release like `install` does, but leaves the result in the current directory. It never touches `bin_dir` or `packages.yaml`, so nothing becomes tracked or updatable.
+
+```
+wpkget get <user/repo> [...]
+         [--tag/-t <tag>]     release tag to download (default: the latest release)
+         [--out/-o <dir>]     output directory (default: the current directory)
+         [--match <pattern>]  glob to select the release asset
+         [--name <binary>]    name for the extracted binary (single repo only)
+         [--all]              extract the whole archive into <repo>-<tag>/
+         [--no-extract]       keep the downloaded file as is
+         [--force]            overwrite an existing destination
+         [--provider/-p <p>]  source provider: github (default) or gitlab
+```
+
+Examples:
+
+```
+wpkget get deese/wpkget                 # latest wpkget binary, next to your terminal
+wpkget get cli/cli --tag 2.67.0         # a specific release ("v2.67.0" is tried too)
+wpkget get BurntSushi/ripgrep --all -o D:\tmp
+wpkget get junegunn/fzf --no-extract    # keep the .zip untouched
+```
+
+The path of what was written is printed on stdout and nothing else, so it can be used in scripts (`$(wpkget get cli/cli)`); the download notice and the progress bar go to stderr. With the modern output a `↓` row is shown instead, followed by the path.
+
+- Without `--tag` the latest release is used. With `--tag` the exact tag is requested first and, if it does not exist, the same tag with the `v` prefix added or removed (`1.2.3` and `v1.2.3`).
+- An existing destination is refused before anything is downloaded, unless `--force` is given. With `--all` a directory that exists and is empty is accepted.
+- The same checks as `install` apply: size and SHA-256 verification, timeouts, and your proxy's own inspection.
+- It does not replace running programs. To update wpkget itself, `get` the new binary and swap it manually: `wpkget get deese/wpkget` leaves `wpkget.exe` in the current directory. If that is the running binary, Windows will normally refuse to overwrite it even with `--force`, so run it from another directory or use `--out`.
+
 ### GitLab
 
 The repo argument selects the provider:

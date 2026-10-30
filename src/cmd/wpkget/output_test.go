@@ -65,3 +65,24 @@ func TestNewUIDecision(t *testing.T) {
 		}
 	}
 }
+
+func TestHandleGetRejectsInvalidCombinations(t *testing.T) {
+	cfg := &config.Config{Progress: "never"}
+	g := parseGlobals(t)
+	cases := []struct {
+		name  string
+		repos []string
+		opts  getOptions
+	}{
+		{"no repo", nil, getOptions{}},
+		{"--tag with several repos", []string{"a/b", "c/d"}, getOptions{tag: "v1"}},
+		{"--name with several repos", []string{"a/b", "c/d"}, getOptions{name: "x"}},
+		{"--no-extract with --all", []string{"a/b"}, getOptions{noExtract: true, all: true}},
+		{"--no-extract with --name", []string{"a/b"}, getOptions{noExtract: true, name: "x"}},
+	}
+	for _, tc := range cases {
+		if got := handleGet(tc.repos, tc.opts, cfg, nil, &g); got != exitGeneral {
+			t.Errorf("%s: exit code %d, want %d", tc.name, got, exitGeneral)
+		}
+	}
+}

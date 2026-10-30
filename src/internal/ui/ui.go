@@ -23,6 +23,7 @@ const (
 	UpToDate Status = iota
 	Updated         // also used for fresh installs (Old empty)
 	Pinned
+	Downloaded // one-off download (get): not installed or tracked
 	Failed
 )
 
@@ -50,12 +51,12 @@ type Options struct {
 }
 
 type iconSet struct {
-	ok, upd, pin, fail, spin, full, empty, arrow, rule string
+	ok, upd, pin, fail, spin, full, empty, arrow, rule, dl string
 }
 
 var (
-	unicodeIcons = iconSet{"✓", "▲", "•", "✗", "⟳", "█", "░", "→", "─"}
-	asciiIcons   = iconSet{"+", "^", "o", "x", "*", "#", "-", "->", "-"}
+	unicodeIcons = iconSet{"✓", "▲", "•", "✗", "⟳", "█", "░", "→", "─", "↓"}
+	asciiIcons   = iconSet{"+", "^", "o", "x", "*", "#", "-", "->", "-", "v"}
 )
 
 const (
@@ -194,6 +195,12 @@ func (u *UI) Row(r Result) {
 			tail = u.dim("(dry-run)")
 		}
 		fmt.Fprintf(u.w, " %s %s %s%s  %s\n", u.yellow(u.ic.upd), u.bold(pad(r.Repo, nameW)), from, u.bgreen(pad(newV, verW)), tail)
+	case Downloaded:
+		tail := u.dim(fmt.Sprintf("%10s  %6s", progress.FormatBytes(r.Size), progress.FormatDuration(r.Dur)))
+		if r.DryRun {
+			tail = u.dim("(dry-run)")
+		}
+		fmt.Fprintf(u.w, " %s %s %s  %s\n", u.cyan(u.ic.dl), u.bold(pad(r.Repo, nameW)), u.bgreen(pad(newV, verW)), tail)
 	case Failed:
 		u.failed++
 		msg := "unknown error"
@@ -202,6 +209,11 @@ func (u *UI) Row(r Result) {
 		}
 		fmt.Fprintf(u.w, " %s %s\n     %s\n", u.red(u.ic.fail), u.bold(r.Repo), u.dim(msg))
 	}
+}
+
+// Note prints a dimmed, indented line below the last row (e.g. an output path).
+func (u *UI) Note(text string) {
+	fmt.Fprintf(u.w, "     %s\n", u.dim(text))
 }
 
 // Summary prints the totals line. Call it once after the last Row.
