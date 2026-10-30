@@ -32,7 +32,7 @@ func runGet(args []string) int {
 	fs := flag.NewFlagSet("get", flag.ExitOnError)
 	fs.Usage = usage
 	registerGlobals(fs, &g)
-	fs.StringVar(&opts.provider, "provider", "", "source provider: github (default) or gitlab")
+	fs.StringVar(&opts.provider, "provider", "", "source provider: github (default), gitlab or sysinternals")
 	fs.StringVar(&opts.provider, "p", "", "shorthand for --provider")
 	fs.StringVar(&opts.tag, "tag", "", "release tag to download (default: the latest release)")
 	fs.StringVar(&opts.tag, "t", "", "shorthand for --tag")

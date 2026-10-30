@@ -19,6 +19,7 @@ import (
 	"github.com/deese/wpkget/src/internal/install"
 	"github.com/deese/wpkget/src/internal/packages"
 	"github.com/deese/wpkget/src/internal/progress"
+	"github.com/deese/wpkget/src/internal/sysinternals"
 	"github.com/deese/wpkget/src/internal/ui"
 	"github.com/deese/wpkget/src/internal/zipdown"
 )
@@ -204,7 +205,7 @@ func runInstall(args []string) int {
 	fs.StringVar(&binaryName, "name", "", "rename the installed binary (single repo only)")
 	fs.StringVar(&match, "match", "", "glob pattern to select the release asset")
 	fs.BoolVar(&all, "all", false, "copy all archive contents to bin-dir")
-	fs.StringVar(&provider, "provider", "", "source provider: github (default) or gitlab")
+	fs.StringVar(&provider, "provider", "", "source provider: github (default), gitlab or sysinternals")
 	fs.StringVar(&provider, "p", "", "shorthand for --provider")
 
 	repos := parseInterspersed(fs, args)
@@ -269,7 +270,7 @@ func runURL(args []string) int {
 	fs := flag.NewFlagSet("url", flag.ExitOnError)
 	fs.Usage = usage
 	registerGlobals(fs, &g)
-	fs.StringVar(&provider, "provider", "", "source provider: github (default) or gitlab")
+	fs.StringVar(&provider, "provider", "", "source provider: github (default), gitlab or sysinternals")
 	fs.StringVar(&provider, "p", "", "shorthand for --provider")
 	repos := parseInterspersed(fs, args)
 	cfg, _, _ := setup(&g)
@@ -285,7 +286,7 @@ func runShow(args []string) int {
 	fs := flag.NewFlagSet("show", flag.ExitOnError)
 	fs.Usage = usage
 	registerGlobals(fs, &g)
-	fs.StringVar(&provider, "provider", "", "source provider: github (default) or gitlab")
+	fs.StringVar(&provider, "provider", "", "source provider: github (default), gitlab or sysinternals")
 	fs.StringVar(&provider, "p", "", "shorthand for --provider")
 	repos := parseInterspersed(fs, args)
 	cfg, pkgList, _ := setup(&g)
@@ -681,9 +682,12 @@ func handleShow(repos []string, flagProvider string, pkgList *packages.List, cfg
 		}
 
 		var release *github.Release
-		if spec.provider == "gitlab" {
+		switch spec.provider {
+		case "gitlab":
 			release, err = gitlab.LatestRelease(spec.host, spec.repo, cfg.UserAgent, g.debugHTTP)
-		} else {
+		case sysinternals.Provider:
+			release, err = sysinternals.LatestRelease(spec.repo, cfg.UserAgent, g.debugHTTP)
+		default:
 			release, err = github.LatestRelease(spec.repo, cfg.UserAgent, g.debugHTTP)
 		}
 		if err != nil {
@@ -827,7 +831,7 @@ Usage: wpkget [flags] <command> [args]
 
 Commands:
   install <repo> [...]         install latest release (GitHub by default)
-           [--provider/-p <p>] source provider: github (default) or gitlab
+           [--provider/-p <p>] source provider: github (default), gitlab or sysinternals
            [--name <binary>]   rename the installed binary (single repo only)
            [--match <pattern>] glob pattern to select the release asset
                                (e.g. --match "*windows-amd64*.zip")
@@ -847,9 +851,9 @@ Commands:
   check                        show latest available version for each tracked package
   remove  <user/repo> [...]    remove packages from tracking (binary not deleted)
   url     <user/repo> [...]    print the download URL without installing
-           [--provider/-p <p>] source provider: github (default) or gitlab
+           [--provider/-p <p>] source provider: github (default), gitlab or sysinternals
   show    <user/repo> [...]    show package details and all available release assets
-           [--provider/-p <p>] source provider: github (default) or gitlab
+           [--provider/-p <p>] source provider: github (default), gitlab or sysinternals
   config  <sub>                manage the config file
            open [packages]     open the file in $VISUAL/$EDITOR or the OS default app
            path [packages]     print the file path
@@ -863,6 +867,7 @@ Repo argument formats:
   https://gitlab.com/group/repo[/...] GitLab (auto-detected from URL)
   https://<host>/group/repo           self-hosted GitLab (host must be in gitlab_hosts)
   owner/repo --provider gitlab        GitLab (explicit flag)
+  sysinternals/<tool> -p sysinternals Sysinternals zip, e.g. sysinternals/process-explorer
 
 Flags (accepted anywhere on the command line):
   --config    <path>   config file (default: %APPDATA%\wpkget\config.yaml)
