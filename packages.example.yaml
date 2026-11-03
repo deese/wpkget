@@ -19,3 +19,8 @@ packages:
   # - repo: someuser/sometool
   #   version: "1.0.0"
   #   min_release_age: 168h   # wait a week before updating this one
+
+  # prefer_zip overrides the global setting for one package:
+  # - repo: someuser/sometool
+  #   version: "1.0.0"
+  #   prefer_zip: false

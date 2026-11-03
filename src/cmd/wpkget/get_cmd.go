@@ -114,6 +114,7 @@ func handleGet(repos []string, o getOptions, cfg *config.Config, zd *zipdown.Cli
 			Progress:   progressOut(cfg, g),
 			Zipdown:    zd,
 			MinAge:     effectiveMinAge(cfg, g, nil),
+			PreferZip:  effectivePreferZip(cfg, nil),
 		}
 		if u != nil {
 			opts.Feedback = u

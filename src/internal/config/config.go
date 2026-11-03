@@ -26,6 +26,10 @@ type Config struct {
 	// downloads are then not verified (no size or digest is available).
 	GitHubRemote string `yaml:"github_remote"`
 
+	// PreferZip makes wpkget pick the .zip when a release offers both a .zip
+	// and another format (e.g. a bare .exe). Can be overridden per package.
+	PreferZip bool `yaml:"prefer_zip"`
+
 	// MinReleaseAge is how long a release must have been published before it
 	// is installed or updated to, as a Go duration ("48h", "90m"; "0" or empty
 	// disables it). It gives time to notice a compromised release. Can be
@@ -153,6 +157,9 @@ func Load(path string) (*Config, error) {
 	if overlay.PassCmd != "" {
 		cfg.PassCmd = overlay.PassCmd
 	}
+	if overlay.PreferZip {
+		cfg.PreferZip = true
+	}
 	if overlay.ModernTerm {
 		cfg.ModernTerm = true
 	}
@@ -210,6 +217,9 @@ func writeDefaults(path string, cfg *Config) error {
 		"# github:\n" +
 		"#   token_env: GITHUB_TOKEN             # default\n" +
 		"#   token_pass: github/wpkget           # pass/winpass entry, see pass_cmd\n\n" +
+		"# When a release has both a .zip and another format (e.g. a bare .exe), use the .zip.\n" +
+		"# Can be overridden per package in packages.yaml.\n" +
+		"# prefer_zip: true\n\n" +
 		"# Minimum age of a release before it is installed or updated to (e.g. 48h).\n" +
 		"# Gives time to notice a compromised release. Empty or 0 disables it.\n" +
 		"# Override per package in packages.yaml or per run with --min-age.\n" +

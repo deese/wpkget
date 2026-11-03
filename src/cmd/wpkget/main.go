@@ -68,8 +68,18 @@ func trackedLookup(cfg *config.Config, g *globals, e *packages.Entry) install.Op
 		Verbose:   g.verbose,
 		DebugHTTP: g.debugHTTP,
 		MinAge:    effectiveMinAge(cfg, g, e),
+		PreferZip: effectivePreferZip(cfg, e),
 		Current:   e.Version,
 	}
+}
+
+// effectivePreferZip returns whether to prefer .zip assets: the package's own
+// setting when it has one, otherwise the global prefer_zip.
+func effectivePreferZip(cfg *config.Config, entry *packages.Entry) bool {
+	if entry != nil && entry.PreferZip != nil {
+		return *entry.PreferZip
+	}
+	return cfg.PreferZip
 }
 
 // effectiveMinAge returns the minimum release age to apply: --min-age first,
@@ -405,6 +415,7 @@ func handleInstall(repos []string, binaryName, binDir, match string, all bool, f
 			Progress:   progressOut(cfg, g),
 			Zipdown:    zd,
 			MinAge:     effectiveMinAge(cfg, g, pkgList.Get(spec.repo)),
+			PreferZip:  effectivePreferZip(cfg, pkgList.Get(spec.repo)),
 		}
 		if u != nil {
 			opts.Feedback = u
@@ -538,6 +549,7 @@ func handleUpdate(repos []string, cfg *config.Config, pkgList *packages.List, zd
 			Progress:   progressOut(cfg, g),
 			Zipdown:    zd,
 			MinAge:     lookup.MinAge,
+			PreferZip:  lookup.PreferZip,
 			Current:    lookup.Current,
 		}
 		if u != nil {
@@ -704,6 +716,7 @@ func handleURL(repos []string, flagProvider string, cfg *config.Config, g *globa
 			Verbose:   g.verbose,
 			DebugHTTP: g.debugHTTP,
 			MinAge:    effectiveMinAge(cfg, g, nil),
+			PreferZip: effectivePreferZip(cfg, nil),
 		})
 		if err != nil {
 			log.Printf("url %s: %v", spec.repo, err)

@@ -8,6 +8,27 @@ import (
 	"github.com/deese/wpkget/src/internal/packages"
 )
 
+func TestEffectivePreferZip(t *testing.T) {
+	yes, no := true, false
+	tests := []struct {
+		name   string
+		global bool
+		entry  *packages.Entry
+		want   bool
+	}{
+		{"off by default", false, nil, false},
+		{"global on", true, nil, true},
+		{"unset package follows global", true, &packages.Entry{}, true},
+		{"package can turn it on", false, &packages.Entry{PreferZip: &yes}, true},
+		{"package can turn it off", true, &packages.Entry{PreferZip: &no}, false},
+	}
+	for _, tt := range tests {
+		if got := effectivePreferZip(&config.Config{PreferZip: tt.global}, tt.entry); got != tt.want {
+			t.Errorf("%s: got %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
 func TestEffectiveMinAge(t *testing.T) {
 	cfg := &config.Config{MinReleaseAge: "48h"}
 	pkg := &packages.Entry{MinReleaseAge: "6h"}

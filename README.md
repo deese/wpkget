@@ -53,6 +53,9 @@ modern_term: false
 github:
   token_pass: github/wpkget
 
+# Optional: take the .zip when a release also offers a bare .exe (see "Install a package").
+# prefer_zip: true
+
 # Optional: only install releases at least this old (see "Minimum release age").
 # min_release_age: 48h
 
@@ -92,6 +95,8 @@ wpkget install https://gitlab.com/group/project
 ```
 
 wpkget selects the release asset built for your operating system and architecture, among files ending in `.zip`, `.tar.gz`, `.gz` or `.exe` (and bare extensionless binaries on Linux and macOS). Use `--match` when the choice is ambiguous; `wpkget show <repo>` lists the available assets, and `--verbose` prints how the choice was made.
+
+When a release offers both a `.zip` and another format (typically a bare `.exe`), the first one the provider lists is used. Set `prefer_zip: true` in the config to always take the `.zip` in that case; a package can override it with `prefer_zip: true|false` in `packages.yaml`. It also applies inside a `--match` pattern, but never widens it, and a release that only ships an `.exe` still gets the `.exe`. Check with `--verbose`, because a `.zip` that is not the tool itself (for example `tool_symbols.zip`) would also win over the `.exe` if it passes the OS and architecture filters; use `--match` or `prefer_zip: false` for that package.
 The binary is extracted (if compressed) and moved to `bin_dir`. The archive is deleted afterward.
 
 ### Download a release without installing it

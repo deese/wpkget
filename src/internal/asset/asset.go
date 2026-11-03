@@ -26,9 +26,12 @@ var allowedExts = []string{".zip", ".tar.gz", ".gz", ".exe"}
 //     If none match, fall back to excluding assets for other known platforms.
 //  3. Among the OS candidates, prefer the current architecture.
 //
+// With preferZip, whenever a .zip is among the remaining candidates (after
+// match or the heuristics above) only the .zip assets are kept.
+//
 // If multiple candidates remain after all filters, the first is used and a
 // warning is printed. If none remain, ErrNoAsset is returned.
-func Select(assets []github.Asset, repoName string, match string, verbose bool) (*github.Asset, error) {
+func Select(assets []github.Asset, repoName string, match string, preferZip, verbose bool) (*github.Asset, error) {
 	trace := func(format string, args ...any) {
 		if verbose {
 			log.Printf("asset: "+format, args...)
@@ -76,6 +79,13 @@ func Select(assets []github.Asset, repoName string, match string, verbose bool) 
 				candidates = preferredExts
 				trace("preferring .zip/.exe → %d", len(candidates))
 			}
+		}
+	}
+
+	if preferZip {
+		if zips := filterByZip(candidates); len(zips) > 0 && len(zips) < len(candidates) {
+			candidates = zips
+			trace("preferring .zip → %d", len(candidates))
 		}
 	}
 
@@ -224,6 +234,17 @@ func filterByPreferredWindowsExt(assets []github.Asset) []github.Asset {
 	for _, a := range assets {
 		lower := strings.ToLower(a.Name)
 		if strings.HasSuffix(lower, ".zip") || strings.HasSuffix(lower, ".exe") {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// filterByZip keeps only the .zip assets.
+func filterByZip(assets []github.Asset) []github.Asset {
+	var out []github.Asset
+	for _, a := range assets {
+		if strings.HasSuffix(strings.ToLower(a.Name), ".zip") {
 			out = append(out, a)
 		}
 	}

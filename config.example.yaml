@@ -27,3 +27,7 @@ zipdown_token: ""
 # GitHub lookups and downloads go through it instead of api.github.com;
 # downloads are not verified in this mode.
 # github_remote: https://artifactory.example.com/artifactory/github-generic-remote
+
+# When a release has both a .zip and another format (e.g. a bare .exe), use the .zip.
+# Can be overridden per package in packages.yaml (prefer_zip: true|false).
+# prefer_zip: true

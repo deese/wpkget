@@ -164,7 +164,8 @@ Asset selection is the most fragile part of the tool because release naming is n
 2. Otherwise, reject assets whose extension is not in the allowed set: `.zip`, `.tar.gz`, `.gz`, `.exe`.
 3. Prefer assets whose name contains `windows` (case-insensitive).
 4. Among matching assets prefer `amd64` or `x86_64` over `386` or `i386`.
-5. If exactly one asset remains, use it. If more than one remains, pick the first match and log a warning listing the alternatives. If none remain, return an error with exit code 2.
+5. With `prefer_zip` (config, overridable per package), if a `.zip` is among the remaining candidates only the `.zip` assets are kept. This is applied last, so it also works inside a `--match` pattern but never widens it. It exists because some proxies flag bare `.exe` downloads; a release that only ships an `.exe` still gets the `.exe`.
+6. If exactly one asset remains, use it. If more than one remains, pick the first match and log a warning listing the alternatives. If none remain, return an error with exit code 2.
 
 The selection logic is isolated in `internal/asset` so it can be unit-tested independently without network calls.
 

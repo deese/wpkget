@@ -46,6 +46,9 @@ type Options struct {
 	Feedback   Feedback        // download events for the modern output; takes precedence over Progress
 	Zipdown    *zipdown.Client // nil means zipdown is disabled
 
+	// PreferZip keeps only the .zip assets when a .zip and other formats (e.g. a
+	// bare .exe) are all candidates.
+	PreferZip bool
 	// MinAge, when positive, makes the release lookup pick the newest release
 	// published at least this long ago instead of the latest one.
 	MinAge time.Duration
@@ -206,7 +209,7 @@ func ResolveURL(opts Options) (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
-	chosen, err := asset.Select(release.Assets, repoBaseName(opts.Repo), opts.Match, opts.Verbose)
+	chosen, err := asset.Select(release.Assets, repoBaseName(opts.Repo), opts.Match, opts.PreferZip, opts.Verbose)
 	if err != nil {
 		return "", "", err
 	}

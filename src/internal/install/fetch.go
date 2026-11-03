@@ -67,7 +67,7 @@ func pickAsset(opts Options, release *github.Release) (*github.Asset, error) {
 	if opts.Verbose {
 		log.Printf("release: %s %s (%s)", opts.Repo, release.TagName, sourceLabel(opts.Provider, opts.Host))
 	}
-	chosen, err := asset.Select(release.Assets, repoBaseName(opts.Repo), opts.Match, opts.Verbose)
+	chosen, err := asset.Select(release.Assets, repoBaseName(opts.Repo), opts.Match, opts.PreferZip, opts.Verbose)
 	if err != nil {
 		return nil, err
 	}

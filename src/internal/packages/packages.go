@@ -22,6 +22,10 @@ type Entry struct {
 	All         bool   `yaml:"all,omitempty"`          // when true, all archive contents are copied to bin_dir
 	KeepVersion bool   `yaml:"keep_version,omitempty"` // when true, skip update/check for this package
 
+	// PreferZip overrides the global prefer_zip for this package; nil means
+	// "use the global setting", so false can switch it off for one package.
+	PreferZip *bool `yaml:"prefer_zip,omitempty"`
+
 	// MinReleaseAge overrides the global min_release_age for this package
 	// ("0" disables it for this package even when the global one is set).
 	MinReleaseAge string `yaml:"min_release_age,omitempty"`
