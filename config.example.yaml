@@ -17,3 +17,13 @@ zipdown_token: ""
 #   token_env: GITHUB_TOKEN     # default
 #   token_pass: github/wpkget   # pass/winpass entry, see pass_cmd
 # pass_cmd: winpass
+
+# Only install releases that have been published for at least this long, to
+# leave time to notice a compromised release. Go duration (48h, 90m); empty or 0
+# disables it. Override per package in packages.yaml or per run with --min-age.
+# min_release_age: 48h
+
+# Generic proxy of https://github.com/ (e.g. an Artifactory generic remote).
+# GitHub lookups and downloads go through it instead of api.github.com;
+# downloads are not verified in this mode.
+# github_remote: https://artifactory.example.com/artifactory/github-generic-remote

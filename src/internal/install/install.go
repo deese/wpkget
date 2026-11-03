@@ -45,6 +45,13 @@ type Options struct {
 	Progress   io.Writer       // where to draw the download progress bar; nil disables it
 	Feedback   Feedback        // download events for the modern output; takes precedence over Progress
 	Zipdown    *zipdown.Client // nil means zipdown is disabled
+
+	// MinAge, when positive, makes the release lookup pick the newest release
+	// published at least this long ago instead of the latest one.
+	MinAge time.Duration
+	// Current is the installed tag, if any. With MinAge set, an installed
+	// release newer than the eligible one is kept instead of downgraded.
+	Current string
 }
 
 // Result is returned by a successful Run.
@@ -58,15 +65,24 @@ type Result struct {
 // httpClient has no overall timeout: downloads are bounded by the header and idle timeouts in downloadURL.
 var httpClient = &http.Client{}
 
-// latestRelease dispatches to the correct provider based on opts.Provider.
-func latestRelease(provider, host, repo, userAgent string, debugHTTP bool) (*github.Release, error) {
-	switch provider {
-	case "gitlab":
-		return gitlab.LatestRelease(host, repo, userAgent, debugHTTP)
+// latestRelease dispatches to the correct provider based on opts.Provider. With
+// opts.MinAge set it returns the newest release old enough instead of the
+// latest. The sysinternals provider has no release history, so MinAge does not
+// apply to it.
+func latestRelease(opts Options) (*github.Release, error) {
+	switch opts.Provider {
 	case sysinternals.Provider:
-		return sysinternals.LatestRelease(repo, userAgent, debugHTTP)
+		return sysinternals.LatestRelease(opts.Repo, opts.UserAgent, opts.DebugHTTP)
+	case "gitlab":
+		if opts.MinAge > 0 {
+			return gitlab.ReleaseOlderThan(opts.Host, opts.Repo, opts.MinAge, opts.Current, opts.UserAgent, opts.DebugHTTP)
+		}
+		return gitlab.LatestRelease(opts.Host, opts.Repo, opts.UserAgent, opts.DebugHTTP)
 	}
-	return github.LatestRelease(repo, userAgent, debugHTTP)
+	if opts.MinAge > 0 {
+		return github.ReleaseOlderThan(opts.Repo, opts.MinAge, opts.Current, opts.UserAgent, opts.DebugHTTP)
+	}
+	return github.LatestRelease(opts.Repo, opts.UserAgent, opts.DebugHTTP)
 }
 
 // dprint logs a debug message when enabled is true.
@@ -80,7 +96,7 @@ func dprint(enabled bool, format string, args ...any) {
 // resolve → download → decompress → move → cleanup.
 func Run(opts Options) (*Result, error) {
 	opts = withProviderDefaults(opts)
-	release, err := latestRelease(opts.Provider, opts.Host, opts.Repo, opts.UserAgent, opts.DebugHTTP)
+	release, err := latestRelease(opts)
 	if err != nil {
 		return nil, err
 	}
@@ -181,14 +197,16 @@ func sourceLabel(provider, host string) string {
 	return provider
 }
 
-// ResolveURL returns the download URL for the latest release asset
-// without downloading anything.
-func ResolveURL(provider, host, repo, match, userAgent string, verbose, debugHTTP bool) (string, string, error) {
-	release, err := latestRelease(provider, host, repo, userAgent, debugHTTP)
+// ResolveURL returns the tag and download URL of the release asset that
+// install would use (see Options.MinAge), without downloading anything.
+// It reads Provider, Host, Repo, Match, UserAgent, Verbose, DebugHTTP, MinAge
+// and Current from opts.
+func ResolveURL(opts Options) (string, string, error) {
+	release, err := latestRelease(opts)
 	if err != nil {
 		return "", "", err
 	}
-	chosen, err := asset.Select(release.Assets, repoBaseName(repo), match, verbose)
+	chosen, err := asset.Select(release.Assets, repoBaseName(opts.Repo), opts.Match, opts.Verbose)
 	if err != nil {
 		return "", "", err
 	}

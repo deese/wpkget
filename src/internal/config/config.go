@@ -2,9 +2,11 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
+	"time"
 
 	"github.com/deese/wpkget/src/internal/progress"
 
@@ -17,6 +19,18 @@ type Config struct {
 	ZipdownURL   string `yaml:"zipdown_url"`
 	ZipdownToken string `yaml:"zipdown_token"`
 	UserAgent    string `yaml:"user_agent"`
+
+	// GitHubRemote is the base URL of a generic proxy of https://github.com/
+	// (e.g. an Artifactory generic remote). When set, release lookup and
+	// downloads for GitHub repos go through it instead of api.github.com;
+	// downloads are then not verified (no size or digest is available).
+	GitHubRemote string `yaml:"github_remote"`
+
+	// MinReleaseAge is how long a release must have been published before it
+	// is installed or updated to, as a Go duration ("48h", "90m"; "0" or empty
+	// disables it). It gives time to notice a compromised release. Can be
+	// overridden per package and per run with --min-age.
+	MinReleaseAge string `yaml:"min_release_age"`
 
 	// GitLabHosts lists the self-hosted GitLab instances wpkget may talk to,
 	// keyed by host (and port, if any), e.g. "git.example.com".
@@ -125,6 +139,17 @@ func Load(path string) (*Config, error) {
 	if overlay.UserAgent != "" {
 		cfg.UserAgent = overlay.UserAgent
 	}
+	if overlay.GitHubRemote != "" {
+		u, err := url.Parse(overlay.GitHubRemote)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return nil, fmt.Errorf("config: %s: invalid github_remote %q (want an http(s) URL)", resolved, overlay.GitHubRemote)
+		}
+		cfg.GitHubRemote = overlay.GitHubRemote
+	}
+	if _, err := ParseMinAge(overlay.MinReleaseAge); err != nil {
+		return nil, fmt.Errorf("config: %s: %w", resolved, err)
+	}
+	cfg.MinReleaseAge = overlay.MinReleaseAge
 	if overlay.PassCmd != "" {
 		cfg.PassCmd = overlay.PassCmd
 	}
@@ -141,6 +166,22 @@ func Load(path string) (*Config, error) {
 	cfg.GitHub = overlay.GitHub
 
 	return cfg, nil
+}
+
+// ParseMinAge parses a minimum release age such as "48h" or "90m". An empty
+// string means no minimum. Days are not supported: use "48h" for two days.
+func ParseMinAge(s string) (time.Duration, error) {
+	if s == "" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, fmt.Errorf("invalid min_release_age %q (want a duration such as 48h or 90m)", s)
+	}
+	if d < 0 {
+		return 0, fmt.Errorf("invalid min_release_age %q (must not be negative)", s)
+	}
+	return d, nil
 }
 
 // writeDefaults creates the config file at path with commented default values.
@@ -169,6 +210,14 @@ func writeDefaults(path string, cfg *Config) error {
 		"# github:\n" +
 		"#   token_env: GITHUB_TOKEN             # default\n" +
 		"#   token_pass: github/wpkget           # pass/winpass entry, see pass_cmd\n\n" +
+		"# Minimum age of a release before it is installed or updated to (e.g. 48h).\n" +
+		"# Gives time to notice a compromised release. Empty or 0 disables it.\n" +
+		"# Override per package in packages.yaml or per run with --min-age.\n" +
+		"# min_release_age: 48h\n\n" +
+		"# Generic proxy of https://github.com/ (e.g. an Artifactory generic remote), optional.\n" +
+		"# GitHub lookups and downloads go through it instead of api.github.com;\n" +
+		"# downloads are not verified in this mode. Example:\n" +
+		"# github_remote: https://artifactory.example.com/artifactory/github-generic-remote\n\n" +
 		"# Self-hosted GitLab instances (optional). Example:\n" +
 		"# gitlab_hosts:\n" +
 		"#   git.example.com:\n" +

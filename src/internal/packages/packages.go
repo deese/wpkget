@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/deese/wpkget/src/internal/config"
+
 	"gopkg.in/yaml.v3"
 )
 
@@ -19,6 +21,10 @@ type Entry struct {
 	Match       string `yaml:"match,omitempty"`        // optional glob pattern used to select the release asset
 	All         bool   `yaml:"all,omitempty"`          // when true, all archive contents are copied to bin_dir
 	KeepVersion bool   `yaml:"keep_version,omitempty"` // when true, skip update/check for this package
+
+	// MinReleaseAge overrides the global min_release_age for this package
+	// ("0" disables it for this package even when the global one is set).
+	MinReleaseAge string `yaml:"min_release_age,omitempty"`
 }
 
 // List is the in-memory representation of packages.yaml.
@@ -42,6 +48,11 @@ func Load(path string) (*List, error) {
 
 	if err := yaml.Unmarshal(data, l); err != nil {
 		return nil, fmt.Errorf("packages: parse %s: %w", path, err)
+	}
+	for _, e := range l.Packages {
+		if _, err := config.ParseMinAge(e.MinReleaseAge); err != nil {
+			return nil, fmt.Errorf("packages: %s: %s: %w", path, e.Repo, err)
+		}
 	}
 
 	return l, nil

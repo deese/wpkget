@@ -9,6 +9,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,8 +22,11 @@ var apiBase = "https://api.github.com"
 
 // Release holds the fields we need from the GitHub Releases API response.
 type Release struct {
-	TagName string  `json:"tag_name"`
-	Assets  []Asset `json:"assets"`
+	TagName     string    `json:"tag_name"`
+	Assets      []Asset   `json:"assets"`
+	PublishedAt time.Time `json:"published_at"` // zero when the provider does not report it
+	Draft       bool      `json:"draft"`
+	Prerelease  bool      `json:"prerelease"`
 }
 
 // Asset represents a single downloadable file attached to a release.
@@ -48,12 +52,13 @@ var (
 	tokenErr  error
 )
 
-// Configure sets the credential sources from the user config. It must be
-// called before any request is made.
+// Configure sets the credential sources and the optional github_remote from
+// the user config. It must be called before any request is made.
 func Configure(cfg *config.Config) {
 	tokenCfg = cfg.GitHub
 	passCmd = cfg.PassCmd
 	tokenOnce = sync.Once{}
+	remoteBase = strings.TrimRight(cfg.GitHubRemote, "/")
 }
 
 // authToken returns the API token: the environment variable first, then the
@@ -89,6 +94,9 @@ func NewNotFound(msg string) error { return notFoundError{msg} }
 // LatestRelease fetches the latest release for the given "owner/repo" string.
 // It uses the GITHUB_TOKEN environment variable as a Bearer token when present.
 func LatestRelease(repo, userAgent string, debugHTTP bool) (*Release, error) {
+	if remoteBase != "" {
+		return remoteLatestRelease(repo, userAgent, debugHTTP)
+	}
 	return fetchRelease(
 		fmt.Sprintf("%s/repos/%s/releases/latest", apiBase, repo),
 		fmt.Sprintf("github: repository %q not found or has no releases", repo),
@@ -97,6 +105,9 @@ func LatestRelease(repo, userAgent string, debugHTTP bool) (*Release, error) {
 
 // ReleaseByTag fetches the release published for the given tag.
 func ReleaseByTag(repo, tag, userAgent string, debugHTTP bool) (*Release, error) {
+	if remoteBase != "" {
+		return remoteReleaseByTag(repo, tag, userAgent, debugHTTP)
+	}
 	return fetchRelease(
 		fmt.Sprintf("%s/repos/%s/releases/tags/%s", apiBase, repo, url.PathEscape(tag)),
 		fmt.Sprintf("github: no release with tag %q in %q", tag, repo),
@@ -106,9 +117,44 @@ func ReleaseByTag(repo, tag, userAgent string, debugHTTP bool) (*Release, error)
 // fetchRelease GETs apiURL and decodes a single release. notFound is the
 // message used for HTTP 404.
 func fetchRelease(apiURL, notFound, repo, userAgent string, debugHTTP bool) (*Release, error) {
+	var release Release
+	if err := getAPI(apiURL, notFound, repo, userAgent, debugHTTP, &release); err != nil {
+		return nil, err
+	}
+	return &release, nil
+}
+
+// recentReleasesLimit is how many of the newest releases are inspected when
+// looking for one that is old enough (see ReleaseOlderThan).
+const recentReleasesLimit = 30
+
+// ReleaseOlderThan returns the newest release published at least minAge ago,
+// see PickEligible for how current is treated.
+func ReleaseOlderThan(repo string, minAge time.Duration, current, userAgent string, debugHTTP bool) (*Release, error) {
+	if remoteBase != "" {
+		return remoteReleaseOlderThan(repo, minAge, current, userAgent, debugHTTP)
+	}
+	var releases []Release
+	err := getAPI(
+		fmt.Sprintf("%s/repos/%s/releases?per_page=%d", apiBase, repo, recentReleasesLimit),
+		fmt.Sprintf("github: repository %q not found or has no releases", repo),
+		repo, userAgent, debugHTTP, &releases)
+	if err != nil {
+		return nil, err
+	}
+	picked, err := PickEligible(releases, minAge, current, time.Now())
+	if err != nil {
+		return nil, fmt.Errorf("github: %q: %w", repo, err)
+	}
+	return picked, nil
+}
+
+// getAPI GETs apiURL and decodes the JSON body into out. notFound is the
+// message used for HTTP 404.
+func getAPI(apiURL, notFound, repo, userAgent string, debugHTTP bool, out any) error {
 	req, err := http.NewRequest(http.MethodGet, apiURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("github: build request: %w", err)
+		return fmt.Errorf("github: build request: %w", err)
 	}
 
 	req.Header.Set("Accept", "application/vnd.github+json")
@@ -118,7 +164,7 @@ func fetchRelease(apiURL, notFound, repo, userAgent string, debugHTTP bool) (*Re
 	}
 	token, err := authToken()
 	if err != nil {
-		return nil, fmt.Errorf("github: token: %w", err)
+		return fmt.Errorf("github: token: %w", err)
 	}
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
@@ -135,24 +181,22 @@ func fetchRelease(apiURL, notFound, repo, userAgent string, debugHTTP bool) (*Re
 		log.Printf("debug-http: response:\n%s", dump)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("github: request failed: %w", err)
+		return fmt.Errorf("github: request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotFound {
-		return nil, NewNotFound(notFound)
+		return NewNotFound(notFound)
 	}
 	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
-		return nil, fmt.Errorf("github: API rate limit exceeded or bad token (HTTP %d)", resp.StatusCode)
+		return fmt.Errorf("github: API rate limit exceeded or bad token (HTTP %d)", resp.StatusCode)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("github: unexpected status %d for %s", resp.StatusCode, repo)
+		return fmt.Errorf("github: unexpected status %d for %s", resp.StatusCode, repo)
 	}
 
-	var release Release
-	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
-		return nil, fmt.Errorf("github: decode response: %w", err)
+	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		return fmt.Errorf("github: decode response: %w", err)
 	}
-
-	return &release, nil
+	return nil
 }

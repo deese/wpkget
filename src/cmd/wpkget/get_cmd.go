@@ -113,6 +113,7 @@ func handleGet(repos []string, o getOptions, cfg *config.Config, zd *zipdown.Cli
 			UserAgent:  cfg.UserAgent,
 			Progress:   progressOut(cfg, g),
 			Zipdown:    zd,
+			MinAge:     effectiveMinAge(cfg, g, nil),
 		}
 		if u != nil {
 			opts.Feedback = u

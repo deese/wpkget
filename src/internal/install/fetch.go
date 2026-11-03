@@ -38,7 +38,7 @@ func releaseByTag(provider, host, repo, tag, userAgent string, debugHTTP bool) (
 // "v" prefix added or removed ("1.2.3" <-> "v1.2.3"), since users often omit it.
 func resolveRelease(opts Options) (*github.Release, error) {
 	if opts.Tag == "" {
-		return getLatest(opts.Provider, opts.Host, opts.Repo, opts.UserAgent, opts.DebugHTTP)
+		return getLatest(opts)
 	}
 
 	byTag := func(tag string) (*github.Release, error) {

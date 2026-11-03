@@ -60,7 +60,7 @@ func newFetchEnv(t *testing.T, files map[string]string, knownTags ...string) *fe
 
 	oldLatest, oldByTag := getLatest, getByTag
 	t.Cleanup(func() { getLatest, getByTag = oldLatest, oldByTag })
-	getLatest = func(provider, host, repo, ua string, dbg bool) (*github.Release, error) {
+	getLatest = func(Options) (*github.Release, error) {
 		env.latestHit = true
 		return release("v9.9.9"), nil
 	}

@@ -53,6 +53,12 @@ modern_term: false
 github:
   token_pass: github/wpkget
 
+# Optional: only install releases at least this old (see "Minimum release age").
+# min_release_age: 48h
+
+# Optional: generic proxy of https://github.com/ (see "GitHub remote" below).
+# github_remote: https://artifactory.example.com/artifactory/github-generic-remote
+
 # Optional: self-hosted GitLab instances (see "GitLab" below).
 gitlab_hosts:
   git.example.com:
@@ -202,6 +208,24 @@ Notes:
 - Instances are reached over HTTPS only.
 - The tracked package is identified by `repo`, so the same `group/project` on two different hosts cannot be tracked at once.
 
+### GitHub remote
+
+Where `api.github.com` is not reachable but a generic proxy of `https://github.com/` is (for example an Artifactory generic remote whose *Remote Repository URL* is `https://github.com/`), set `github_remote` to the proxy's base URL:
+
+```yaml
+github_remote: https://artifactory.example.com/artifactory/github-generic-remote
+```
+
+All GitHub lookups and downloads then go through it. Because such a proxy only serves files, not the API:
+
+- The latest release is the first entry of `<repo>/releases.atom`, so it may be a pre-release.
+- Assets are listed from `<repo>/releases/expanded_assets/<tag>`, which is HTML and not a stable API.
+- No size or SHA-256 digest is available, so downloads are **not verified**.
+- `GITHUB_TOKEN` is not sent to the remote.
+- The proxy may cache the feed, so a very recent release can take a while to appear.
+
+GitLab is not covered: its API uses nested paths that a generic remote cannot cache (`Parent api/v4/projects must be a folder`).
+
 ### Get the download URL for a repository
 
 Print the resolved download URL without downloading anything.
@@ -313,9 +337,33 @@ packages:
   - repo: sysinternals/process-explorer
     provider: sysinternals
     version: v17.2-2026-10-15
+  - repo: someuser/sometool
+    version: "1.0.0"
+    min_release_age: 168h        # this package waits a week (see "Minimum release age")
 ```
 
 The file is updated automatically after each successful install or update.
+
+### Minimum release age
+
+A freshly published release may be a compromised one that nobody has noticed yet. With `min_release_age`, wpkget only installs or updates to a release that has been published for at least that long, and picks the newest release old enough instead of the latest:
+
+```yaml
+min_release_age: 48h   # config.yaml; "0" or empty disables it
+```
+
+The value is a Go duration (`48h`, `90m`); days are not supported, use `48h` for two days. The setting can be given at three levels, the most specific wins: `--min-age` for one run (`--min-age 0` disables it), `min_release_age` on a package in `packages.yaml` (`"0"` exempts that package), and the global `min_release_age`. It applies to `install`, `update`, `check`, `get` (without `--tag`), `url` and `list -v`. An explicit `--tag` is never delayed. `install --min-age` is not stored in `packages.yaml`; edit the file to set it per package.
+
+Behavior to be aware of:
+
+- If the installed release is already newer than the minimum age allows (for example after `install --min-age 0`), `update` keeps it instead of downgrading.
+- If no recent release is old enough, the command fails and says how old the newest one is. Only the 30 newest releases are inspected.
+- Drafts and pre-releases are ignored. A release without a known publication date is never eligible.
+- Through a `github_remote` the age comes from the `updated` time of the Atom feed, which moves forward if a release is edited. That can only delay a release, never make it look older.
+- The `sysinternals` provider has no release history, so the minimum age does not apply to it.
+- `show` still prints the latest release, not the eligible one.
+
+This is a mitigation, not a guarantee. It only helps if a malicious release is noticed and withdrawn within the window, and it does not protect against assets being swapped on an old release, because that does not change its publication date.
 
 ## Flags
 
@@ -331,6 +379,7 @@ The file is updated automatically after each successful install or update.
 | `--modern` / `--no-modern` | Force the modern terminal output on or off for this run. Overrides `modern_term` |
 | `--quiet`, `-q` | Modern output only: hide up-to-date and pinned packages (the summary still counts them) |
 | `--progress <mode>` | Download progress bar: `auto` (default), `always` or `never`. Overrides the `progress` config key |
+| `--min-age <duration>` | Only use releases published at least this long ago, e.g. `48h`; `0` disables it. Overrides `min_release_age` (see [Minimum release age](#minimum-release-age)) |
 
 ### Download behavior
 

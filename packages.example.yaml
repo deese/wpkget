@@ -14,3 +14,8 @@ packages:
   - repo: BurntSushi/ripgrep
     version: "14.1.1"
     binary_name: rg   # installed as rg.exe
+
+  # min_release_age overrides the global setting for one package ("0" disables it):
+  # - repo: someuser/sometool
+  #   version: "1.0.0"
+  #   min_release_age: 168h   # wait a week before updating this one

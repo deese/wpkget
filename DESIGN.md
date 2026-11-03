@@ -16,7 +16,9 @@ wpkget/
 │   │       └── main.go          # entry point, CLI wiring
 │   └── internal/
 │       ├── github/
-│       │   └── github.go        # GitHub Releases API client
+│       │   ├── github.go        # GitHub Releases API client
+│       │   ├── remote.go        # github_remote: generic-proxy client (Atom feed + HTML)
+│       │   └── eligible.go      # PickEligible: min_release_age selection, shared by providers
 │       ├── gitlab/
 │       │   └── gitlab.go        # GitLab Releases API client, per-host token/TLS
 │       ├── sysinternals/
@@ -77,6 +79,22 @@ The response is decoded into a minimal struct containing only the fields we need
 `github.Configure` is called once at startup. The lookup is lazy and guarded by a `sync.Once`, so `pass` is only invoked, and may only prompt, when the first request reaches the API, and commands that never call it (`list`, `config show`) never trigger it. A failed `token_pass` lookup is cached and returned as an error for every request instead of degrading to anonymous requests: a misspelled entry should not go unnoticed. The token is only attached in `fetchRelease`, so it never reaches asset downloads.
 
 **HTTP client:** `net/http` default client with a 30-second timeout. No retries — a failed network call surfaces as a clear error; the user can re-run.
+
+### GitHub remote (`github_remote`)
+
+For networks where `api.github.com` is unreachable but a generic proxy of `https://github.com/` (an Artifactory generic remote) is, `github.Configure(url)` switches `LatestRelease`/`ReleaseByTag` to `remote.go`. Such a proxy only caches files, so there is no JSON API, and it follows the redirect of `/releases/latest` itself (verified: it answers 200 with the HTML of the final page and no `Location`). Therefore:
+
+- The latest tag comes from the first entry of `{remote}/{repo}/releases.atom` that has assets. Entries without assets are skipped (ripgrep publishes `ignore-x.y.z` helper-crate releases that come first in the feed); at most 10 are tried. The feed may include pre-releases, unlike the API.
+- Assets are scraped from `{remote}/{repo}/releases/expanded_assets/{tag}` (`/releases/download/{tag}/{name}` links). This is HTML with no stability contract; a layout change surfaces as "no release … or it has no assets".
+- Downloads use `{remote}/{repo}/releases/download/{tag}/{name}`. No size or digest is available, so `verifyDownload` has nothing to check; this is an accepted loss of integrity checking.
+- `GITHUB_TOKEN` is never sent to the remote.
+- GitLab is not supported through a generic remote: it caches each response as a file, so `api/v4/projects/{id}` and `api/v4/projects/{id}/releases/...` cannot coexist (`Parent … must be a folder`), and it decodes `%2F` in project paths.
+
+### Minimum release age (`min_release_age`)
+
+Defends against installing a release that was just published and may be malicious. `install.Options.MinAge` (resolved by `effectiveMinAge`: `--min-age`, then the package entry, then the config) makes `install.latestRelease` call `ReleaseOlderThan` instead of the latest-release endpoint. Each provider fetches its newest 30 releases (`GET /repos/{repo}/releases?per_page=30`, GitLab `…/releases?per_page=30`, or the Atom feed for the remote), and `github.PickEligible` returns the newest one published at least `MinAge` ago. It skips drafts and pre-releases, never accepts a release without a publication date (fail closed), and returns the installed tag (`Options.Current`) when that is met first, so `update` never downgrades. Dates are `published_at` (GitHub), `released_at` (GitLab) and the feed's `updated` (remote), which moves forward on edits and can only delay a release.
+
+Limits: it does not detect assets replaced on an old release (the publication date does not change) and only helps when a compromise is found and withdrawn within the window.
 
 ---
 

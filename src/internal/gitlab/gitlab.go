@@ -42,8 +42,9 @@ var (
 )
 
 type releaseJSON struct {
-	TagName string `json:"tag_name"`
-	Assets  struct {
+	TagName    string    `json:"tag_name"`
+	ReleasedAt time.Time `json:"released_at"`
+	Assets     struct {
 		Links []struct {
 			Name string `json:"name"`
 			URL  string `json:"url"`
@@ -107,6 +108,34 @@ func LatestRelease(host, repo, userAgent string, debugHTTP bool) (*github.Releas
 		return nil, fmt.Errorf("gitlab: repository %q has no releases", repo)
 	}
 	return toRelease(releases[0]), nil
+}
+
+// recentReleasesLimit is how many of the newest releases are inspected when
+// looking for one that is old enough (see ReleaseOlderThan).
+const recentReleasesLimit = 30
+
+// ReleaseOlderThan returns the newest release published at least minAge ago,
+// see github.PickEligible for how current is treated.
+func ReleaseOlderThan(host, repo string, minAge time.Duration, current, userAgent string, debugHTTP bool) (*github.Release, error) {
+	if host == "" {
+		host = DefaultHost
+	}
+	apiURL := fmt.Sprintf("https://%s%s/api/v4/projects/%s/releases?per_page=%d", host, hostPrefix(host), url.PathEscape(repo), recentReleasesLimit)
+
+	var raw []releaseJSON
+	notFound := fmt.Sprintf("gitlab: repository %q not found or has no releases", repo)
+	if err := getJSON(host, apiURL, repo, notFound, userAgent, debugHTTP, &raw); err != nil {
+		return nil, err
+	}
+	releases := make([]github.Release, 0, len(raw))
+	for _, r := range raw {
+		releases = append(releases, *toRelease(r))
+	}
+	picked, err := github.PickEligible(releases, minAge, current, time.Now())
+	if err != nil {
+		return nil, fmt.Errorf("gitlab: %q: %w", repo, err)
+	}
+	return picked, nil
 }
 
 // ReleaseByTag fetches the release published for the given tag.
@@ -174,8 +203,9 @@ func getJSON(host, apiURL, repo, notFound, userAgent string, debugHTTP bool, out
 
 func toRelease(r releaseJSON) *github.Release {
 	release := &github.Release{
-		TagName: r.TagName,
-		Assets:  make([]github.Asset, 0, len(r.Assets.Links)),
+		TagName:     r.TagName,
+		PublishedAt: r.ReleasedAt,
+		Assets:      make([]github.Asset, 0, len(r.Assets.Links)),
 	}
 	for _, link := range r.Assets.Links {
 		release.Assets = append(release.Assets, github.Asset{

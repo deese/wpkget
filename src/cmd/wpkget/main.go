@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/deese/wpkget/src/internal/asset"
 	"github.com/deese/wpkget/src/internal/config"
@@ -47,6 +48,43 @@ type globals struct {
 	progress   string
 	modern     optBool
 	quiet      bool
+	minAge     string // --min-age as typed; parsed by setup into minAgeValue
+	// minAgeSet reports that --min-age was given, even as 0, which disables the
+	// minimum for this run.
+	minAgeSet   bool
+	minAgeValue time.Duration
+}
+
+// trackedLookup returns the options to resolve the release a tracked package
+// would be updated to. Current is the installed tag, so that an installed
+// release newer than the minimum age allows is kept rather than downgraded.
+func trackedLookup(cfg *config.Config, g *globals, e *packages.Entry) install.Options {
+	return install.Options{
+		Repo:      e.Repo,
+		Provider:  e.Provider,
+		Host:      e.Host,
+		Match:     e.Match,
+		UserAgent: cfg.UserAgent,
+		Verbose:   g.verbose,
+		DebugHTTP: g.debugHTTP,
+		MinAge:    effectiveMinAge(cfg, g, e),
+		Current:   e.Version,
+	}
+}
+
+// effectiveMinAge returns the minimum release age to apply: --min-age first,
+// then the package's own setting, then the global one. Values were validated
+// when the config and package list were loaded.
+func effectiveMinAge(cfg *config.Config, g *globals, entry *packages.Entry) time.Duration {
+	if g.minAgeSet {
+		return g.minAgeValue
+	}
+	if entry != nil && entry.MinReleaseAge != "" {
+		d, _ := config.ParseMinAge(entry.MinReleaseAge)
+		return d
+	}
+	d, _ := config.ParseMinAge(cfg.MinReleaseAge)
+	return d
 }
 
 // registerGlobals binds global flags to g on the given FlagSet.
@@ -63,6 +101,7 @@ func registerGlobals(fs *flag.FlagSet, g *globals) {
 	fs.BoolFunc("no-modern", "classic terminal output (overrides modern_term)", func(string) error { g.modern = optBool{set: true}; return nil })
 	fs.BoolVar(&g.quiet, "quiet", false, "modern output: hide up-to-date and pinned packages")
 	fs.BoolVar(&g.quiet, "q", false, "shorthand for --quiet")
+	fs.StringVar(&g.minAge, "min-age", "", "only use releases published at least this long ago, e.g. 48h; 0 disables (overrides config)")
 }
 
 // parseInterspersed calls fs.Parse repeatedly, collecting positional arguments
@@ -98,6 +137,13 @@ func setup(g *globals) (*config.Config, *packages.List, *zipdown.Client) {
 			log.Fatalf("invalid --progress %q (want auto, always or never)", g.progress)
 		}
 		cfg.Progress = g.progress
+	}
+	if g.minAge != "" {
+		d, err := config.ParseMinAge(g.minAge)
+		if err != nil {
+			log.Fatalf("--min-age: %v", err)
+		}
+		g.minAgeSet, g.minAgeValue = true, d
 	}
 	github.Configure(cfg)
 	gitlab.Configure(cfg)
@@ -358,6 +404,7 @@ func handleInstall(repos []string, binaryName, binDir, match string, all bool, f
 			UserAgent:  cfg.UserAgent,
 			Progress:   progressOut(cfg, g),
 			Zipdown:    zd,
+			MinAge:     effectiveMinAge(cfg, g, pkgList.Get(spec.repo)),
 		}
 		if u != nil {
 			opts.Feedback = u
@@ -446,7 +493,8 @@ func handleUpdate(repos []string, cfg *config.Config, pkgList *packages.List, zd
 			}
 			continue
 		}
-		latest, _, err := install.ResolveURL(entry.Provider, entry.Host, entry.Repo, entry.Match, cfg.UserAgent, g.verbose, g.debugHTTP)
+		lookup := trackedLookup(cfg, g, &entry)
+		latest, _, err := install.ResolveURL(lookup)
 		if err != nil {
 			fail(entry, err)
 			continue
@@ -489,6 +537,8 @@ func handleUpdate(repos []string, cfg *config.Config, pkgList *packages.List, zd
 			UserAgent:  cfg.UserAgent,
 			Progress:   progressOut(cfg, g),
 			Zipdown:    zd,
+			MinAge:     lookup.MinAge,
+			Current:    lookup.Current,
 		}
 		if u != nil {
 			opts.Feedback = u
@@ -555,7 +605,7 @@ func handleList(showURL bool, pkgList *packages.List, cfg *config.Config, g *glo
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", e.Repo, e.Version, e.BinaryName, e.BinDir)
 			continue
 		}
-		_, url, err := install.ResolveURL(e.Provider, e.Host, e.Repo, e.Match, cfg.UserAgent, g.verbose, g.debugHTTP)
+		_, url, err := install.ResolveURL(trackedLookup(cfg, g, &e))
 		if err != nil {
 			log.Printf("list %s: resolve url: %v", e.Repo, err)
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", e.Repo, e.Version, e.BinaryName, e.BinDir, "(error)")
@@ -584,7 +634,7 @@ func handleCheck(pkgList *packages.List, cfg *config.Config, g *globals) int {
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", e.Repo, e.Version, "-", "pinned")
 			continue
 		}
-		latest, _, err := install.ResolveURL(e.Provider, e.Host, e.Repo, e.Match, cfg.UserAgent, g.verbose, g.debugHTTP)
+		latest, _, err := install.ResolveURL(trackedLookup(cfg, g, &e))
 		if err != nil {
 			log.Printf("check %s: %v", e.Repo, err)
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", e.Repo, e.Version, "(error)", "error")
@@ -646,7 +696,15 @@ func handleURL(repos []string, flagProvider string, cfg *config.Config, g *globa
 			continue
 		}
 
-		version, url, err := install.ResolveURL(spec.provider, spec.host, spec.repo, "", cfg.UserAgent, g.verbose, g.debugHTTP)
+		version, url, err := install.ResolveURL(install.Options{
+			Repo:      spec.repo,
+			Provider:  spec.provider,
+			Host:      spec.host,
+			UserAgent: cfg.UserAgent,
+			Verbose:   g.verbose,
+			DebugHTTP: g.debugHTTP,
+			MinAge:    effectiveMinAge(cfg, g, nil),
+		})
 		if err != nil {
 			log.Printf("url %s: %v", spec.repo, err)
 			code = mapError(err)
@@ -879,6 +937,7 @@ Flags (accepted anywhere on the command line):
   --debug              print step-by-step diagnostic output
   --debug-http         dump outgoing HTTP requests and response bodies
   --progress  <mode>   download progress bar: auto (default), always, never
+  --min-age   <dur>    only use releases published at least this long ago, e.g. 48h; 0 disables (config: min_release_age)
   --modern, --no-modern  modern terminal output: colors, aligned columns, live progress (config: modern_term)
   --quiet, -q          modern output: hide up-to-date and pinned packages
 
