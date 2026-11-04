@@ -1,0 +1,120 @@
+stages:
+  - build
+  - release
+
+# Run only on tags (mirrored from GitHub)
+workflow:
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v/
+
+variables:
+  PACKAGE_NAME: wpkget
+  PACKAGE_URL: ${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/${PACKAGE_NAME}/${CI_COMMIT_TAG}
+  TARGETS: "windows/amd64 windows/arm64 windows/386 linux/amd64 linux/arm64 linux/386 darwin/amd64 darwin/arm64"
+
+build:
+  stage: build
+  image: golang:1.22
+  script:
+    - apt-get update -qq && apt-get install -y -qq zip
+    - mkdir -p dist
+    - |
+      for target in ${TARGETS}; do
+        goos="${target%/*}"
+        goarch="${target#*/}"
+        ext=""
+        [ "${goos}" = "windows" ] && ext=".exe"
+        binary="wpkget_${goos}_${goarch}${ext}"
+        CGO_ENABLED=0 GOOS="${goos}" GOARCH="${goarch}" \
+          go build -ldflags="-s -w -X main.version=${CI_COMMIT_TAG}" \
+          -o "dist/${binary}" ./src/cmd/wpkget/
+        if [ "${goos}" = "windows" ]; then
+          (cd dist && zip -q "wpkget_${goos}_${goarch}.zip" "${binary}")
+        else
+          tar -C dist -czf "dist/wpkget_${goos}_${goarch}.tar.gz" "${binary}"
+        fi
+      done
+    - cd dist
+    - sha256sum wpkget_* > SHA256SUMS
+    # Release description: SHA-256 hashes rendered as a code block
+    - |
+      {
+        echo "## SHA-256"
+        echo
+        echo '```'
+        cat SHA256SUMS
+        echo '```'
+      } > RELEASE_NOTES.md
+    # Upload to the project's generic package registry; release links point here
+    - |
+      for file in wpkget_* SHA256SUMS; do
+        curl --fail --silent --show-error --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+          --upload-file "${file}" "${PACKAGE_URL}/${file}"
+      done
+  artifacts:
+    paths:
+      - dist/
+
+release:
+  stage: release
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  needs: ["build"]
+  script:
+    - echo "Creating release ${CI_COMMIT_TAG}"
+  release:
+    tag_name: $CI_COMMIT_TAG
+    name: $CI_COMMIT_TAG
+    description: ./dist/RELEASE_NOTES.md
+    assets:
+      links:
+        - name: wpkget_windows_amd64.zip
+          url: ${PACKAGE_URL}/wpkget_windows_amd64.zip
+          link_type: package
+        - name: wpkget_windows_arm64.zip
+          url: ${PACKAGE_URL}/wpkget_windows_arm64.zip
+          link_type: package
+        - name: wpkget_windows_386.zip
+          url: ${PACKAGE_URL}/wpkget_windows_386.zip
+          link_type: package
+        - name: wpkget_linux_amd64.tar.gz
+          url: ${PACKAGE_URL}/wpkget_linux_amd64.tar.gz
+          link_type: package
+        - name: wpkget_linux_arm64.tar.gz
+          url: ${PACKAGE_URL}/wpkget_linux_arm64.tar.gz
+          link_type: package
+        - name: wpkget_linux_386.tar.gz
+          url: ${PACKAGE_URL}/wpkget_linux_386.tar.gz
+          link_type: package
+        - name: wpkget_darwin_amd64.tar.gz
+          url: ${PACKAGE_URL}/wpkget_darwin_amd64.tar.gz
+          link_type: package
+        - name: wpkget_darwin_arm64.tar.gz
+          url: ${PACKAGE_URL}/wpkget_darwin_arm64.tar.gz
+          link_type: package
+        - name: wpkget_windows_amd64.exe
+          url: ${PACKAGE_URL}/wpkget_windows_amd64.exe
+          link_type: package
+        - name: wpkget_windows_arm64.exe
+          url: ${PACKAGE_URL}/wpkget_windows_arm64.exe
+          link_type: package
+        - name: wpkget_windows_386.exe
+          url: ${PACKAGE_URL}/wpkget_windows_386.exe
+          link_type: package
+        - name: wpkget_linux_amd64
+          url: ${PACKAGE_URL}/wpkget_linux_amd64
+          link_type: package
+        - name: wpkget_linux_arm64
+          url: ${PACKAGE_URL}/wpkget_linux_arm64
+          link_type: package
+        - name: wpkget_linux_386
+          url: ${PACKAGE_URL}/wpkget_linux_386
+          link_type: package
+        - name: wpkget_darwin_amd64
+          url: ${PACKAGE_URL}/wpkget_darwin_amd64
+          link_type: package
+        - name: wpkget_darwin_arm64
+          url: ${PACKAGE_URL}/wpkget_darwin_arm64
+          link_type: package
+        - name: SHA256SUMS
+          url: ${PACKAGE_URL}/SHA256SUMS
+          link_type: other
