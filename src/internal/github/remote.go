@@ -27,6 +27,10 @@ const maxFeedCandidates = 10
 // remote) in front of https://github.com/. Empty means talk to api.github.com.
 var remoteBase string
 
+// remoteDownloadOnly makes remoteBase serve downloads only; releases are still
+// looked up on api.github.com.
+var remoteDownloadOnly bool
+
 // assetHref matches the download links in a release's expanded_assets page.
 var assetHref = regexp.MustCompile(`href="[^"]*/releases/download/[^/"]+/([^"?#]+)"`)
 

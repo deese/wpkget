@@ -229,6 +229,8 @@ All GitHub lookups and downloads then go through it. Because such a proxy only s
 - `GITHUB_TOKEN` is not sent to the remote.
 - The proxy may cache the feed, so a very recent release can take a while to appear.
 
+If the proxy serves a stale `releases.atom`, set `github_remote_download_only: true` (requires `github_remote`). Releases are then looked up on `api.github.com` (so `GITHUB_TOKEN`/`github.token_*` apply, pre-releases are skipped and `min_release_age` uses the real publication date), and only the asset downloads go through the proxy. Size and SHA-256 digest come from the API, so downloads stay verified. `api.github.com` must be reachable.
+
 GitLab is not covered: its API uses nested paths that a generic remote cannot cache (`Parent api/v4/projects must be a folder`).
 
 ### Get the download URL for a repository

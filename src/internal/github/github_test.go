@@ -127,3 +127,29 @@ func TestPassFailureIsReported(t *testing.T) {
 		t.Fatal("a failing pass lookup must not fall back to anonymous requests silently")
 	}
 }
+
+func TestRemoteDownloadOnlyLooksUpOnAPI(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.EscapedPath()
+		w.Write([]byte(`{"tag_name":"v2","assets":[{"name":"a.zip","browser_download_url":"https://github.com/o/r/releases/download/v2/a.zip","size":5,"digest":"sha256:ab"}]}`))
+	}))
+	t.Cleanup(srv.Close)
+	oldAPI := apiBase
+	Configure(&config.Config{GitHubRemote: "https://proxy.example/gh/", GitHubRemoteDownloadOnly: true})
+	token, tokenErr = "", nil // Configure does not clear the result of an earlier lookup
+	apiBase = srv.URL
+	t.Cleanup(func() { apiBase = oldAPI; Configure(&config.Config{}) })
+
+	rel, err := LatestRelease("o/r", "", false)
+	if err != nil || gotPath != "/repos/o/r/releases/latest" {
+		t.Fatalf("lookup must hit the API: err=%v path=%q", err, gotPath)
+	}
+	a := rel.Assets[0]
+	if want := "https://proxy.example/gh/o/r/releases/download/v2/a.zip"; a.BrowserDownloadURL != want {
+		t.Errorf("download URL = %q, want %q", a.BrowserDownloadURL, want)
+	}
+	if a.Digest != "sha256:ab" {
+		t.Errorf("digest must be kept for verification, got %q", a.Digest)
+	}
+}

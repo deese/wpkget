@@ -59,6 +59,28 @@ func Configure(cfg *config.Config) {
 	passCmd = cfg.PassCmd
 	tokenOnce = sync.Once{}
 	remoteBase = strings.TrimRight(cfg.GitHubRemote, "/")
+	remoteDownloadOnly = cfg.GitHubRemoteDownloadOnly
+}
+
+// useRemoteLookup reports whether releases are resolved through the remote
+// (feed and HTML pages) instead of api.github.com.
+func useRemoteLookup() bool { return remoteBase != "" && !remoteDownloadOnly }
+
+// githubHostPrefix is what a browser_download_url returned by the API starts with.
+const githubHostPrefix = "https://github.com/"
+
+// viaRemote points the asset download URLs of a release found through the API
+// at the remote, when it is configured for downloads only.
+func viaRemote(r *Release) *Release {
+	if remoteBase == "" || !remoteDownloadOnly {
+		return r
+	}
+	for i := range r.Assets {
+		if rest, ok := strings.CutPrefix(r.Assets[i].BrowserDownloadURL, githubHostPrefix); ok {
+			r.Assets[i].BrowserDownloadURL = remoteBase + "/" + rest
+		}
+	}
+	return r
 }
 
 // authToken returns the API token: the environment variable first, then the
@@ -94,7 +116,7 @@ func NewNotFound(msg string) error { return notFoundError{msg} }
 // LatestRelease fetches the latest release for the given "owner/repo" string.
 // It uses the GITHUB_TOKEN environment variable as a Bearer token when present.
 func LatestRelease(repo, userAgent string, debugHTTP bool) (*Release, error) {
-	if remoteBase != "" {
+	if useRemoteLookup() {
 		return remoteLatestRelease(repo, userAgent, debugHTTP)
 	}
 	return fetchRelease(
@@ -105,7 +127,7 @@ func LatestRelease(repo, userAgent string, debugHTTP bool) (*Release, error) {
 
 // ReleaseByTag fetches the release published for the given tag.
 func ReleaseByTag(repo, tag, userAgent string, debugHTTP bool) (*Release, error) {
-	if remoteBase != "" {
+	if useRemoteLookup() {
 		return remoteReleaseByTag(repo, tag, userAgent, debugHTTP)
 	}
 	return fetchRelease(
@@ -121,7 +143,7 @@ func fetchRelease(apiURL, notFound, repo, userAgent string, debugHTTP bool) (*Re
 	if err := getAPI(apiURL, notFound, repo, userAgent, debugHTTP, &release); err != nil {
 		return nil, err
 	}
-	return &release, nil
+	return viaRemote(&release), nil
 }
 
 // recentReleasesLimit is how many of the newest releases are inspected when
@@ -131,7 +153,7 @@ const recentReleasesLimit = 30
 // ReleaseOlderThan returns the newest release published at least minAge ago,
 // see PickEligible for how current is treated.
 func ReleaseOlderThan(repo string, minAge time.Duration, current, userAgent string, debugHTTP bool) (*Release, error) {
-	if remoteBase != "" {
+	if useRemoteLookup() {
 		return remoteReleaseOlderThan(repo, minAge, current, userAgent, debugHTTP)
 	}
 	var releases []Release
@@ -146,7 +168,7 @@ func ReleaseOlderThan(repo string, minAge time.Duration, current, userAgent stri
 	if err != nil {
 		return nil, fmt.Errorf("github: %q: %w", repo, err)
 	}
-	return picked, nil
+	return viaRemote(picked), nil
 }
 
 // getAPI GETs apiURL and decodes the JSON body into out. notFound is the

@@ -26,6 +26,11 @@ type Config struct {
 	// downloads are then not verified (no size or digest is available).
 	GitHubRemote string `yaml:"github_remote"`
 
+	// GitHubRemoteDownloadOnly keeps release lookup on api.github.com and uses
+	// github_remote only for downloads. It avoids the stale releases.atom the
+	// proxy may serve from its cache, and keeps size and digest verification.
+	GitHubRemoteDownloadOnly bool `yaml:"github_remote_download_only"`
+
 	// PreferZip makes wpkget pick the .zip when a release offers both a .zip
 	// and another format (e.g. a bare .exe). Can be overridden per package.
 	PreferZip bool `yaml:"prefer_zip"`
@@ -157,6 +162,12 @@ func Load(path string) (*Config, error) {
 	if overlay.PassCmd != "" {
 		cfg.PassCmd = overlay.PassCmd
 	}
+	if overlay.GitHubRemoteDownloadOnly {
+		if overlay.GitHubRemote == "" {
+			return nil, fmt.Errorf("config: %s: github_remote_download_only requires github_remote", resolved)
+		}
+		cfg.GitHubRemoteDownloadOnly = true
+	}
 	if overlay.PreferZip {
 		cfg.PreferZip = true
 	}
@@ -227,7 +238,10 @@ func writeDefaults(path string, cfg *Config) error {
 		"# Generic proxy of https://github.com/ (e.g. an Artifactory generic remote), optional.\n" +
 		"# GitHub lookups and downloads go through it instead of api.github.com;\n" +
 		"# downloads are not verified in this mode. Example:\n" +
-		"# github_remote: https://artifactory.example.com/artifactory/github-generic-remote\n\n" +
+		"# github_remote: https://artifactory.example.com/artifactory/github-generic-remote\n" +
+		"# Look releases up on api.github.com and use the remote only for downloads\n" +
+		"# (avoids a stale cached feed; downloads stay verified).\n" +
+		"# github_remote_download_only: true\n\n" +
 		"# Self-hosted GitLab instances (optional). Example:\n" +
 		"# gitlab_hosts:\n" +
 		"#   git.example.com:\n" +
