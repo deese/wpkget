@@ -1,6 +1,6 @@
 # wpkget
 
-A minimal package manager that pulls compiled binaries directly from GitHub and GitLab releases (gitlab.com and self-hosted instances) and Sysinternals tools. It targets Windows first and also builds for Linux and macOS.
+A minimal package manager that pulls compiled binaries directly from GitHub and GitLab releases (gitlab.com and self-hosted instances) Sysinternals tools and AgileBits (1Password) products. It targets Windows first and also builds for Linux and macOS.
 
 ## Installation
 
@@ -77,7 +77,7 @@ Download and install the latest release of a GitHub or GitLab repository.
 
 ```
 wpkget install <user/repo> [...]
-         [--provider <p>]     source provider: github (default), gitlab or sysinternals
+         [--provider <p>]     source provider: github (default), gitlab, sysinternals or agilebits
          [--name <binary>]    rename the installed binary (single repo only)
          [--match <pattern>]  glob to select the release asset
          [--all]              copy all archive contents to bin-dir
@@ -112,7 +112,7 @@ wpkget get <user/repo> [...]
          [--all]              extract the whole archive into <repo>-<tag>/
          [--no-extract]       keep the downloaded file as is
          [--force]            overwrite an existing destination
-         [--provider/-p <p>]  source provider: github (default), gitlab or sysinternals
+         [--provider/-p <p>]  source provider: github (default), gitlab, sysinternals or agilebits
 ```
 
 Examples:
@@ -172,6 +172,30 @@ The markdown source of the tool's Learn page (the `MicrosoftDocs/sysinternals` r
 - Only the current build is published: `get --tag` accepts the current `v<version>-<date>` and nothing older.
 - The size of each zip is verified. Sysinternals publishes no checksum and wpkget does not verify the Authenticode signature of the executables.
 - This relies on the layout of that markdown and on the `main` branch of a repository that is not wpkget's. If either changes, the command fails with `no download link found` or `no version or date found`. The same error appears for pages that are not downloadable tools (category pages) or whose tool was retired (`newsid`, `regmon`).
+
+### AgileBits (1Password CLI)
+
+AgileBits publishes its builds as zips on `cache.agilebits.com`, listed on the product history page `app-updates.agilebits.com/product_history/<CODE>`. Use `--provider agilebits` and the product code as the repo (`CLI2` is the 1Password CLI); the owner is ignored.
+
+```
+wpkget install -p agilebits agilebits/CLI2
+wpkget show -p agilebits agilebits/CLI2
+wpkget get -p agilebits --tag 2.41.1 agilebits/CLI2
+```
+
+```yaml
+packages:
+  - repo: agilebits/CLI2
+    provider: agilebits
+    version: 2.42.0
+```
+
+The tracked version is the one the page lists (`2.42.0`). `install` and `update` use the newest stable build: betas are never picked, but `get --tag 2.44.0-beta.01` fetches one on request, and any older listed version can be fetched by tag.
+
+- The binary is installed as `op` (the zip holds `op` and `op.sig`), not as `CLI2`; `--name` overrides it.
+- The size of each zip is verified. wpkget does not verify the `op.sig` signature, and the page publishes no checksum.
+- `min_release_age` does not apply to this provider.
+- Zips are unpacked without their Unix permission bits, so on Linux and macOS the `op` binary is not detected (`no executable binary found in archive`). It works on Windows, which is wpkget's primary target.
 
 ### GitLab
 
@@ -237,7 +261,7 @@ Print the resolved download URL without downloading anything.
 
 ```
 wpkget url <repo> [...]
-         [--provider <p>]     source provider: github (default), gitlab or sysinternals
+         [--provider <p>]     source provider: github (default), gitlab, sysinternals or agilebits
 ```
 
 ### Show package details
@@ -246,7 +270,7 @@ Print the provider, latest release, tracking status (version, per-package option
 
 ```
 wpkget show <repo> [...]
-         [--provider <p>]     source provider: github (default), gitlab or sysinternals
+         [--provider <p>]     source provider: github (default), gitlab, sysinternals or agilebits
 ```
 
 Example output:
@@ -365,7 +389,7 @@ Behavior to be aware of:
 - If no recent release is old enough, the command fails and says how old the newest one is. Only the 30 newest releases are inspected.
 - Drafts and pre-releases are ignored. A release without a known publication date is never eligible.
 - Through a `github_remote` the age comes from the `updated` time of the Atom feed, which moves forward if a release is edited. That can only delay a release, never make it look older.
-- The `sysinternals` provider has no release history, so the minimum age does not apply to it.
+- The `sysinternals` and `agilebits` providers do not apply the minimum age: the first has no release history, the second does not read the publication dates.
 - `show` still prints the latest release, not the eligible one.
 
 This is a mitigation, not a guarantee. It only helps if a malicious release is noticed and withdrawn within the window, and it does not protect against assets being swapped on an old release, because that does not change its publication date.

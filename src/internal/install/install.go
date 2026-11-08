@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/deese/wpkget/src/internal/agilebits"
 	"github.com/deese/wpkget/src/internal/asset"
 	"github.com/deese/wpkget/src/internal/github"
 	"github.com/deese/wpkget/src/internal/gitlab"
@@ -70,12 +71,14 @@ var httpClient = &http.Client{}
 
 // latestRelease dispatches to the correct provider based on opts.Provider. With
 // opts.MinAge set it returns the newest release old enough instead of the
-// latest. The sysinternals provider has no release history, so MinAge does not
-// apply to it.
+// latest. The sysinternals and agilebits providers do not report publication
+// dates per release, so MinAge does not apply to them.
 func latestRelease(opts Options) (*github.Release, error) {
 	switch opts.Provider {
 	case sysinternals.Provider:
 		return sysinternals.LatestRelease(opts.Repo, opts.UserAgent, opts.DebugHTTP)
+	case agilebits.Provider:
+		return agilebits.LatestRelease(opts.Repo, opts.UserAgent, opts.DebugHTTP)
 	case "gitlab":
 		if opts.MinAge > 0 {
 			return gitlab.ReleaseOlderThan(opts.Host, opts.Repo, opts.MinAge, opts.Current, opts.UserAgent, opts.DebugHTTP)
@@ -182,12 +185,20 @@ func Run(opts Options) (*Result, error) {
 // withProviderDefaults applies per-provider defaults. Sysinternals zips bundle
 // the x86, x64 and ARM64 builds with the help file and EULA, so they are
 // extracted whole unless a single binary is requested with BinaryName.
+// AgileBits zips hold a single executable named after the tool, not after the
+// product code of the repo (CLI2 ships op), so it is installed as "op".
 func withProviderDefaults(opts Options) Options {
 	if opts.Provider == sysinternals.Provider && opts.BinaryName == "" {
 		opts.All = true
 	}
+	if opts.Provider == agilebits.Provider && opts.BinaryName == "" {
+		opts.BinaryName = agilebitsBinaryName
+	}
 	return opts
 }
+
+// agilebitsBinaryName is the executable of the 1Password CLI (product CLI2).
+const agilebitsBinaryName = "op"
 
 // sourceLabel describes where a release comes from, e.g. "github" or "gitlab git.example.com".
 func sourceLabel(provider, host string) string {

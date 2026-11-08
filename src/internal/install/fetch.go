@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/deese/wpkget/src/internal/agilebits"
 	"github.com/deese/wpkget/src/internal/asset"
 	"github.com/deese/wpkget/src/internal/github"
 	"github.com/deese/wpkget/src/internal/gitlab"
@@ -29,6 +30,8 @@ func releaseByTag(provider, host, repo, tag, userAgent string, debugHTTP bool) (
 		return gitlab.ReleaseByTag(host, repo, tag, userAgent, debugHTTP)
 	case sysinternals.Provider:
 		return sysinternals.ReleaseByTag(repo, tag, userAgent, debugHTTP)
+	case agilebits.Provider:
+		return agilebits.ReleaseByTag(repo, tag, userAgent, debugHTTP)
 	}
 	return github.ReleaseByTag(repo, tag, userAgent, debugHTTP)
 }
