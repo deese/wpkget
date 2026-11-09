@@ -21,6 +21,8 @@ wpkget/
 │       │   └── eligible.go      # PickEligible: min_release_age selection, shared by providers
 │       ├── gitlab/
 │       │   └── gitlab.go        # GitLab Releases API client, per-host token/TLS
+│       ├── agilebits/
+│       │   └── agilebits.go     # AgileBits (1Password) products, resolved from their product history page
 │       ├── sysinternals/
 │       │   └── sysinternals.go  # Sysinternals tools, resolved from the markdown source of their Learn page
 │       ├── secret/
@@ -58,7 +60,7 @@ Tags: `resolveRelease` asks for the exact tag and, on a not-found error, retries
 
 `config` has its own sub-subcommands (`open`, `path`, `check`, `show`; see [Configuration](#configuration)), implemented in `cmd/wpkget/config_cmd.go`.
 
-`install`, `get`, `url` and `show` accept `--provider github|gitlab|sysinternals` (default `github`). A repo argument may also be a full URL, in which case the provider (and, for GitLab, the host) is derived from it; see [GitLab](#gitlab). The `sysinternals` provider is never inferred from the repo name, because a GitHub organization called `sysinternals` exists.
+`install`, `get`, `url` and `show` accept `--provider github|gitlab|sysinternals|agilebits` (default `github`). A repo argument may also be a full URL, in which case the provider (and, for GitLab, the host) is derived from it; see [GitLab](#gitlab). The `sysinternals` provider is never inferred from the repo name, because a GitHub organization called `sysinternals` exists.
 
 Global flags (`--config`, `--bin-dir`, `--user-agent`, `--dry-run`, `--verbose`, `--debug`, `--debug-http`) are parsed before the subcommand is dispatched.
 
@@ -153,6 +155,25 @@ Why this and not the zip alone: the zip names are case-sensitive on the server a
 **Defaults.** `install.withProviderDefaults` turns `All` on for this provider unless `BinaryName` is set. These zips bundle x86/x64/ARM64 executables, the help file and the EULA, so picking one executable is almost always wrong, while `--name` is an explicit request for a single binary. It is applied in `Run` and `Fetch`; the stored entry keeps whatever the user passed.
 
 **Limitations.** It depends on the layout of a markdown file and on the `main` branch of a repository wpkget does not control, so a restructuring (or moving the repository) makes it fail with `no download link found` or `no version or date found` rather than guess. The same errors appear for category pages and for retired tools. Sysinternals publishes no checksum, so integrity rests on TLS and the size check; the Authenticode signature of the executables is not verified. Each resolution costs one `GET` plus one `HEAD` per linked zip. The repository's `toc.yml` lists the tools but carries no zip name, version or date, so it is not used to resolve them.
+
+---
+
+## AgileBits
+
+AgileBits (1Password) products are zips on `cache.agilebits.com/dist/...`, listed with their version and notes on a static HTML page per product. `internal/agilebits` builds a `github.Release` from that page, so asset selection and the install pipeline are unchanged. The provider is chosen in `install.latestRelease` and `install.releaseByTag`, and in `show`.
+
+```
+GET  https://app-updates.agilebits.com/product_history/{CODE}
+HEAD https://cache.agilebits.com/dist/.../{name}.zip      (once per zip of the chosen version, concurrently)
+```
+
+The repo is `agilebits/<CODE>` where `<CODE>` is the last segment of the history URL (`CLI2` for the 1Password CLI), uppercased; the owner is ignored. Each `<article>` of the page is one version: its `<h3>` gives the version, a `beta` class marks a pre-release, and its `.zip` links are the assets. Links outside `https://cache.agilebits.com/dist/` are dropped, so a link to another host is never followed, and `.pkg` links are ignored.
+
+**Tag.** The version as listed (`2.42.0`, `2.44.0-beta.01`). `LatestRelease` returns the first non-beta article in page order (the page lists newest first). `ReleaseByTag` accepts any listed version, beta or not, because the page keeps the whole history.
+
+**Defaults.** `install.withProviderDefaults` sets `BinaryName` to `op` when empty: the zip holds a single executable called `op` (plus `op.sig`), while the repo name is the product code. The stored entry keeps whatever the user passed.
+
+**Limitations.** It depends on the HTML of one page; if the `<article>`/`<h3>` structure changes it fails with `no download link found` rather than guess. The page carries no checksum, so integrity rests on TLS and the size check; `op.sig` is not verified. The page has a publication date per version, but it is not read, so `min_release_age` does not apply. The binary inside a Unix zip is not detected because `extractZipEntry` drops the exec bit (see the note in the README).
 
 ---
 
@@ -260,7 +281,7 @@ Schema:
 ```yaml
 packages:
   - repo: owner/name
-    provider: gitlab           # optional: "github" (default), "gitlab" or "sysinternals"
+    provider: gitlab           # optional: "github" (default), "gitlab", "sysinternals" or "agilebits"
     host: git.example.com      # optional: self-hosted GitLab host (omitted for gitlab.com)
     version: "v1.2.3"
     binary_name: custom-name   # optional: installed .exe name (without extension)
