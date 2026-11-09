@@ -73,6 +73,11 @@ func Select(assets []github.Asset, repoName string, match string, preferZip, ver
 			candidates = noMusl
 			trace("excluding musl → %d", len(candidates))
 		}
+		// Prefer the first toolchain of the OS precedence list that has a candidate.
+		if toolchain := filterByToolchain(candidates, goos); len(toolchain) > 0 {
+			candidates = toolchain
+			trace("toolchain precedence → %d", len(candidates))
+		}
 		// On Windows prefer .zip/.exe over .tar.gz when both survive.
 		if goos == "windows" {
 			if preferredExts := filterByPreferredWindowsExt(candidates); len(preferredExts) > 0 {
@@ -225,6 +230,24 @@ func filterByExcludingMusl(assets []github.Asset) []github.Asset {
 		}
 	}
 	return out
+}
+
+// toolchainPrecedence lists, per GOOS, the build flavors found in asset names
+// from most to least preferred (e.g. fd ships both -msvc and -gnu for Windows).
+// It is only a tie-breaker: an explicit --match skips it.
+var toolchainPrecedence = map[string][]string{
+	"windows": {"msvc", "gnu"},
+}
+
+// filterByToolchain keeps the assets of the first flavor in toolchainPrecedence
+// that at least one asset carries. It returns nil when none does.
+func filterByToolchain(assets []github.Asset, goos string) []github.Asset {
+	for _, flavor := range toolchainPrecedence[goos] {
+		if matches := filterByKeyword(assets, flavor); len(matches) > 0 {
+			return matches
+		}
+	}
+	return nil
 }
 
 // filterByPreferredWindowsExt keeps only .zip or .exe assets when mixed

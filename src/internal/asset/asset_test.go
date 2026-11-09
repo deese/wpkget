@@ -44,3 +44,38 @@ func TestSelectPreferZip(t *testing.T) {
 		})
 	}
 }
+
+func TestFilterByToolchain(t *testing.T) {
+	tests := []struct {
+		name   string
+		assets []github.Asset
+		goos   string
+		want   []string
+	}{
+		{"msvc beats gnu on windows", assetsNamed("fd-x86_64-pc-windows-gnu.zip", "fd-x86_64-pc-windows-msvc.zip"), "windows", []string{"fd-x86_64-pc-windows-msvc.zip"}},
+		{"gnu is used when there is no msvc", assetsNamed("fd-x86_64-pc-windows-gnu.zip", "fd.zip"), "windows", []string{"fd-x86_64-pc-windows-gnu.zip"}},
+		{"no flavor keeps nothing", assetsNamed("fd.zip"), "windows", nil},
+		{"other platforms are untouched", assetsNamed("fd-gnu.tar.gz", "fd-msvc.tar.gz"), "linux", nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := filterByToolchain(tt.assets, tt.goos)
+			if len(got) != len(tt.want) {
+				t.Fatalf("got %d assets, want %d", len(got), len(tt.want))
+			}
+			for i, a := range got {
+				if a.Name != tt.want[i] {
+					t.Errorf("got %q, want %q", a.Name, tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestSelectMatchBypassesToolchain(t *testing.T) {
+	assets := assetsNamed("fd-x86_64-pc-windows-gnu.zip", "fd-x86_64-pc-windows-msvc.zip")
+	got, err := Select(assets, "fd", "*-gnu.zip", false, false)
+	if err != nil || got.Name != "fd-x86_64-pc-windows-gnu.zip" {
+		t.Fatalf("--match must override the precedence: %v %v", got, err)
+	}
+}
