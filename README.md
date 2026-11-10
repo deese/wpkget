@@ -297,6 +297,8 @@ wpkget update [<repo> ...]
 
 If a newer version is found the full install process runs automatically (download, decompress, move, delete).
 
+`update` never downgrades: if the resolved tag is confidently older than the installed one (dotted numeric tags such as `v10.5.0` vs `v10.5.2`), the installed version is kept and a warning is shown, which usually means a proxy or mirror is serving stale data. Tags that cannot be ordered (e.g. `nightly`) are not blocked. To go back on purpose, download the older release with `wpkget get <repo> --tag <tag>`.
+
 Pass one or more repos to update only those. They must already be tracked (a plain `owner/repo` or a full URL; a URL must also match the tracked host). Untracked repos are reported and the exit code is 1; pinned packages (`keep_version`) are still skipped.
 
 ### Check for available updates (without installing)

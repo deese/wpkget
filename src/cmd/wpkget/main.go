@@ -521,6 +521,18 @@ func handleUpdate(repos []string, cfg *config.Config, pkgList *packages.List, zd
 			continue
 		}
 
+		// Never downgrade: a stale proxy or mirror can resolve to an older tag.
+		if isOlderVersion(latest, entry.Version) {
+			warning := fmt.Sprintf("%s: resolved %s is older than the installed %s, keeping it (stale proxy or mirror?)", entry.Repo, latest, entry.Version)
+			if u != nil {
+				u.Row(ui.Result{Repo: entry.Repo, New: entry.Version, Status: ui.UpToDate})
+				u.Note(warning)
+			} else {
+				log.Printf("update %s", warning)
+			}
+			continue
+		}
+
 		if g.dryRun {
 			if u != nil {
 				u.Row(ui.Result{Repo: entry.Repo, Old: entry.Version, New: latest, Status: ui.Updated, DryRun: true})
