@@ -32,7 +32,7 @@ func runGet(args []string) int {
 	fs := flag.NewFlagSet("get", flag.ExitOnError)
 	fs.Usage = usage
 	registerGlobals(fs, &g)
-	fs.StringVar(&opts.provider, "provider", "", "source provider: github (default), gitlab or sysinternals")
+	fs.StringVar(&opts.provider, "provider", "", "source provider: github (default), gitlab, sysinternals, agilebits or herdr")
 	fs.StringVar(&opts.provider, "p", "", "shorthand for --provider")
 	fs.StringVar(&opts.tag, "tag", "", "release tag to download (default: the latest release)")
 	fs.StringVar(&opts.tag, "t", "", "shorthand for --tag")
@@ -96,25 +96,26 @@ func handleGet(repos []string, o getOptions, cfg *config.Config, zd *zipdown.Cli
 		}
 
 		opts := install.Options{
-			Repo:       spec.repo,
-			Provider:   spec.provider,
-			Host:       spec.host,
-			Tag:        o.tag,
-			BinDir:     o.out,
-			BinaryName: o.name,
-			Match:      o.match,
-			All:        o.all,
-			NoExtract:  o.noExtract,
-			Force:      o.force,
-			DryRun:     g.dryRun,
-			Verbose:    g.verbose,
-			Debug:      g.debug,
-			DebugHTTP:  g.debugHTTP,
-			UserAgent:  cfg.UserAgent,
-			Progress:   progressOut(cfg, g),
-			Zipdown:    zd,
-			MinAge:     effectiveMinAge(cfg, g, nil),
-			PreferZip:  effectivePreferZip(cfg, nil),
+			Repo:           spec.repo,
+			Provider:       spec.provider,
+			Host:           spec.host,
+			Tag:            o.tag,
+			BinDir:         o.out,
+			BinaryName:     o.name,
+			Match:          o.match,
+			All:            o.all,
+			NoExtract:      o.noExtract,
+			Force:          o.force,
+			ExcludeFromAll: effectiveExclude(cfg, nil),
+			DryRun:         g.dryRun,
+			Verbose:        g.verbose,
+			Debug:          g.debug,
+			DebugHTTP:      g.debugHTTP,
+			UserAgent:      cfg.UserAgent,
+			Progress:       progressOut(cfg, g),
+			Zipdown:        zd,
+			MinAge:         effectiveMinAge(cfg, g, nil),
+			PreferZip:      effectivePreferZip(cfg, nil),
 		}
 		if u != nil {
 			opts.Feedback = u

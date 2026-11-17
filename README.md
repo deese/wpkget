@@ -59,6 +59,9 @@ github:
 # Optional: only install releases at least this old (see "Minimum release age").
 # min_release_age: 48h
 
+# Optional: what --all leaves out (see "Excluding files from --all"). Shown here with its defaults.
+# exclude_from_all: ["LICENSE*", "README*", "COPYING*", "NOTICE*", "THIRD-PARTY-NOTICES*"]
+
 # Optional: generic proxy of https://github.com/ (see "GitHub remote" below).
 # github_remote: https://artifactory.example.com/artifactory/github-generic-remote
 
@@ -77,7 +80,7 @@ Download and install the latest release of a GitHub or GitLab repository.
 
 ```
 wpkget install <user/repo> [...]
-         [--provider <p>]     source provider: github (default), gitlab, sysinternals or agilebits
+         [--provider <p>]     source provider: github (default), gitlab, sysinternals, agilebits or herdr
          [--name <binary>]    rename the installed binary (single repo only)
          [--match <pattern>]  glob to select the release asset
          [--all]              copy all archive contents to bin-dir
@@ -112,7 +115,7 @@ wpkget get <user/repo> [...]
          [--all]              extract the whole archive into <repo>-<tag>/
          [--no-extract]       keep the downloaded file as is
          [--force]            overwrite an existing destination
-         [--provider/-p <p>]  source provider: github (default), gitlab, sysinternals or agilebits
+         [--provider/-p <p>]  source provider: github (default), gitlab, sysinternals, agilebits or herdr
 ```
 
 Examples:
@@ -197,6 +200,29 @@ The tracked version is the one the page lists (`2.42.0`). `install` and `update`
 - `min_release_age` does not apply to this provider.
 - Zips are unpacked without their Unix permission bits, so on Linux and macOS the `op` binary is not detected (`no executable binary found in archive`). It works on Windows, which is wpkget's primary target.
 
+### Herdr
+
+Herdr publishes a manifest per product, `releases.herdr.dev/<product>/latest.json`, with the newest version and one download URL and SHA-256 per platform. Use `--provider herdr` and `app` or `core` as the repo (`herdr/app`, `herdr/core`); the owner is ignored.
+
+```
+wpkget install -p herdr herdr/app
+wpkget install -p herdr herdr/core
+wpkget show -p herdr herdr/core
+```
+
+```yaml
+packages:
+  - repo: herdr/app
+    provider: herdr
+    version: 0.1.16
+```
+
+- `app` is installed as `herdr-app` (the repo name alone would be `app`); `--name` overrides it. `core` keeps its own name, `herdr-core`, unless `--name` is given.
+- The SHA-256 of the manifest is verified on download.
+- `core` needs `conpty/` (`conpty.dll`, `OpenConsole.exe`) next to the executable, so it is always installed whole (`--all` is implied) and `--name` renames the executable instead of narrowing the install: `wpkget install -p herdr herdr/core --name hc` installs `hc.exe` plus `conpty/`. The licence and notice files are left out by `exclude_from_all`.
+- The manifest only describes the latest build, so `get --tag` works only for that version, and `min_release_age` does not apply.
+- `app` declares a minimum `core` version (`core_min`), which wpkget does not check.
+
 ### GitLab
 
 The repo argument selects the provider:
@@ -263,7 +289,7 @@ Print the resolved download URL without downloading anything.
 
 ```
 wpkget url <repo> [...]
-         [--provider <p>]     source provider: github (default), gitlab, sysinternals or agilebits
+         [--provider <p>]     source provider: github (default), gitlab, sysinternals, agilebits or herdr
 ```
 
 ### Show package details
@@ -272,7 +298,7 @@ Print the provider, latest release, tracking status (version, per-package option
 
 ```
 wpkget show <repo> [...]
-         [--provider <p>]     source provider: github (default), gitlab, sysinternals or agilebits
+         [--provider <p>]     source provider: github (default), gitlab, sysinternals, agilebits or herdr
 ```
 
 Example output:
@@ -376,6 +402,26 @@ packages:
 ```
 
 The file is updated automatically after each successful install or update.
+
+### Excluding files from --all
+
+`--all` copies the whole archive into the bin dir, including licences and readmes. `exclude_from_all` lists what to leave out, in `config.yaml` (global) and per package in `packages.yaml` (which replaces the global list, it does not extend it):
+
+```yaml
+exclude_from_all: ["LICENSE*", "README*", "COPYING*", "NOTICE*", "THIRD-PARTY-NOTICES*"]   # the default
+```
+
+```yaml
+packages:
+  - repo: someuser/sometool
+    version: "1.0.0"
+    all: true
+    exclude_from_all: ["*.md", "docs"]   # [] copies everything
+```
+
+Patterns are case-insensitive globs. One without `/` is compared with the name of every path component, so `LICENSE*` skips licence files at any depth and a match on a directory skips everything inside it. One with `/` is compared with the path from the archive root (`conpty/x64`). A malformed pattern fails the install. It applies to `install`, `update` and `get --all`.
+
+With `--all`, `--name` renames the main executable (the one wpkget would pick without `--all`) and copies the rest. If `exclude_from_all` would skip that executable, or the archive has none, the install fails instead of leaving it out. For `sysinternals`, which is installed whole by default, `--name` on its own still means "install only this binary" (as before); with an explicit `--all` it renames instead.
 
 ### Minimum release age
 

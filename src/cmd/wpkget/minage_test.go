@@ -53,3 +53,26 @@ func TestEffectiveMinAge(t *testing.T) {
 		}
 	}
 }
+
+func TestEffectiveExclude(t *testing.T) {
+	cfg := &config.Config{ExcludeFromAll: []string{"LICENSE*"}}
+	custom, none := []string{"*.md"}, []string{}
+	tests := []struct {
+		name  string
+		entry *packages.Entry
+		want  int
+	}{
+		{"no entry uses the global list", nil, 1},
+		{"entry without a list uses the global list", &packages.Entry{}, 1},
+		{"entry list replaces the global one", &packages.Entry{ExcludeFromAll: &custom}, 1},
+		{"empty entry list excludes nothing", &packages.Entry{ExcludeFromAll: &none}, 0},
+	}
+	for _, tt := range tests {
+		if got := effectiveExclude(cfg, tt.entry); len(got) != tt.want {
+			t.Errorf("%s: got %v", tt.name, got)
+		}
+	}
+	if got := effectiveExclude(cfg, &packages.Entry{ExcludeFromAll: &custom}); got[0] != "*.md" {
+		t.Errorf("entry list must replace the global one, got %v", got)
+	}
+}

@@ -23,6 +23,8 @@ wpkget/
 │       │   └── gitlab.go        # GitLab Releases API client, per-host token/TLS
 │       ├── agilebits/
 │       │   └── agilebits.go     # AgileBits (1Password) products, resolved from their product history page
+│       ├── herdr/
+│       │   └── herdr.go         # Herdr products (app, core), resolved from their latest.json manifest
 │       ├── sysinternals/
 │       │   └── sysinternals.go  # Sysinternals tools, resolved from the markdown source of their Learn page
 │       ├── secret/
@@ -60,7 +62,7 @@ Tags: `resolveRelease` asks for the exact tag and, on a not-found error, retries
 
 `config` has its own sub-subcommands (`open`, `path`, `check`, `show`; see [Configuration](#configuration)), implemented in `cmd/wpkget/config_cmd.go`.
 
-`install`, `get`, `url` and `show` accept `--provider github|gitlab|sysinternals|agilebits` (default `github`). A repo argument may also be a full URL, in which case the provider (and, for GitLab, the host) is derived from it; see [GitLab](#gitlab). The `sysinternals` provider is never inferred from the repo name, because a GitHub organization called `sysinternals` exists.
+`install`, `get`, `url` and `show` accept `--provider github|gitlab|sysinternals|agilebits|herdr` (default `github`). A repo argument may also be a full URL, in which case the provider (and, for GitLab, the host) is derived from it; see [GitLab](#gitlab). The `sysinternals` provider is never inferred from the repo name, because a GitHub organization called `sysinternals` exists.
 
 Global flags (`--config`, `--bin-dir`, `--user-agent`, `--dry-run`, `--verbose`, `--debug`, `--debug-http`) are parsed before the subcommand is dispatched.
 
@@ -177,6 +179,32 @@ The repo is `agilebits/<CODE>` where `<CODE>` is the last segment of the history
 
 ---
 
+## Excluding files from --all
+
+`install.extractAndCopyAll` takes an `allOptions` (built by `allOpts` from `Options`) and copies the extracted archive with `copyDirContents`. Two things shape what lands in the bin dir.
+
+**Exclusion.** `Options.ExcludeFromAll` is resolved in `cmd/wpkget` by `effectiveExclude`: the package's `exclude_from_all` when present (`*[]string` in `packages.Entry`, so an empty list, "exclude nothing", differs from an absent one), otherwise `config.ExcludeFromAll`. In the config, an absent key means `config.DefaultExcludeFromAll` and an explicit `[]` means nothing. `exclude.go` matches case-insensitively with `path.Match`: a pattern without `/` is tested against each component of the path inside the archive, so a match on a directory prunes the subtree (`filepath.SkipDir`); a pattern with `/` is tested against the path prefix from the archive root. Patterns are validated first (`validateExclude`) so a typo fails the install.
+
+**Rename.** With `BinaryName` set, the main binary is located with `findBinary` (the same choice a non-`--all` install would make) and written under the new name; the rest is copied unchanged. Before copying, it fails when no executable is found or when an exclusion would skip that executable, so an install never silently lacks it. Bare `.exe` and `.gz` assets, which are one file, are renamed directly. `sysinternals` keeps its rule that `--name` without `--all` selects one binary (`withProviderDefaults` only turns `All` on when `BinaryName` is empty).
+
+**Limitations.** The exclusion list is a deny-list: a file new in a later release is copied unless a pattern matches it, and nothing warns about files that are neither installed nor excluded. Installed files are not recorded, so `update` overwrites but never removes files a newer release no longer ships.
+
+---
+
+## Herdr
+
+Herdr products publish `https://releases.herdr.dev/<product>/latest.json`: `version` plus `targets.<os>-<arch>.{url,sha256}`. `internal/herdr` builds a `github.Release` from it, so asset selection and the install pipeline are unchanged. The provider is chosen in `install.latestRelease` and `install.releaseByTag`, and in `show`.
+
+The repo is `herdr/<product>` with `<product>` in `{app, core}`; the owner is ignored. The product is checked against that list before it is placed in the manifest URL, so the repo cannot shape the URL. Targets whose URL is outside `https://releases.herdr.dev/`, or that lack a `sha256`, are dropped (fail closed).
+
+**Tag.** The manifest `version`. Each target becomes an asset named after its URL, with `Digest` set to `sha256:<hex>`, so `verifyDownload` checks it with no provider-specific code. `ReleaseByTag` succeeds only when the tag equals the manifest version, otherwise it returns a `github.ErrNotFound`-matching error.
+
+**Defaults.** `install.herdrDefaults` (called from `withProviderDefaults`) installs `core` whole, because `conpty/` must sit next to `herdr-core.exe`; there `--name` renames the executable (see [Excluding files from --all](#excluding-files-from---all)). `app` is a single executable, installed as `herdr-<product>` (`herdr-app`) when `BinaryName` is empty.
+
+**Limitations.** Only the latest build is described, so older versions cannot be fetched and `min_release_age` does not apply (no publication date). `core_min` (app) and `generation` (core) are ignored.
+
+---
+
 ## Asset selection
 
 Asset selection is the most fragile part of the tool because release naming is not standardised. The heuristic runs in order:
@@ -281,7 +309,7 @@ Schema:
 ```yaml
 packages:
   - repo: owner/name
-    provider: gitlab           # optional: "github" (default), "gitlab", "sysinternals" or "agilebits"
+    provider: gitlab           # optional: "github" (default), "gitlab", "sysinternals", "agilebits" or "herdr"
     host: git.example.com      # optional: self-hosted GitLab host (omitted for gitlab.com)
     version: "v1.2.3"
     binary_name: custom-name   # optional: installed .exe name (without extension)

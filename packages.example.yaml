@@ -24,3 +24,10 @@ packages:
   # - repo: someuser/sometool
   #   version: "1.0.0"
   #   prefer_zip: false
+
+  # exclude_from_all replaces the global list for one package (only used with all: true);
+  # an empty list copies everything:
+  # - repo: someuser/sometool
+  #   version: "1.0.0"
+  #   all: true
+  #   exclude_from_all: ["*.md", "docs"]

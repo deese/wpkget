@@ -26,6 +26,10 @@ type Entry struct {
 	// "use the global setting", so false can switch it off for one package.
 	PreferZip *bool `yaml:"prefer_zip,omitempty"`
 
+	// ExcludeFromAll overrides the global exclude_from_all for this package;
+	// nil means "use the global list" and an empty list excludes nothing.
+	ExcludeFromAll *[]string `yaml:"exclude_from_all,omitempty"`
+
 	// MinReleaseAge overrides the global min_release_age for this package
 	// ("0" disables it for this package even when the global one is set).
 	MinReleaseAge string `yaml:"min_release_age,omitempty"`

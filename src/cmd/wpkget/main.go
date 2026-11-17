@@ -18,6 +18,7 @@ import (
 	"github.com/deese/wpkget/src/internal/config"
 	"github.com/deese/wpkget/src/internal/github"
 	"github.com/deese/wpkget/src/internal/gitlab"
+	"github.com/deese/wpkget/src/internal/herdr"
 	"github.com/deese/wpkget/src/internal/install"
 	"github.com/deese/wpkget/src/internal/packages"
 	"github.com/deese/wpkget/src/internal/progress"
@@ -81,6 +82,15 @@ func effectivePreferZip(cfg *config.Config, entry *packages.Entry) bool {
 		return *entry.PreferZip
 	}
 	return cfg.PreferZip
+}
+
+// effectiveExclude returns the exclude_from_all patterns to apply: the
+// package's own list when it has one, otherwise the global one.
+func effectiveExclude(cfg *config.Config, entry *packages.Entry) []string {
+	if entry != nil && entry.ExcludeFromAll != nil {
+		return *entry.ExcludeFromAll
+	}
+	return cfg.ExcludeFromAll
 }
 
 // effectiveMinAge returns the minimum release age to apply: --min-age first,
@@ -263,7 +273,7 @@ func runInstall(args []string) int {
 	fs.StringVar(&binaryName, "name", "", "rename the installed binary (single repo only)")
 	fs.StringVar(&match, "match", "", "glob pattern to select the release asset")
 	fs.BoolVar(&all, "all", false, "copy all archive contents to bin-dir")
-	fs.StringVar(&provider, "provider", "", "source provider: github (default), gitlab, sysinternals or agilebits")
+	fs.StringVar(&provider, "provider", "", "source provider: github (default), gitlab, sysinternals, agilebits or herdr")
 	fs.StringVar(&provider, "p", "", "shorthand for --provider")
 
 	repos := parseInterspersed(fs, args)
@@ -328,7 +338,7 @@ func runURL(args []string) int {
 	fs := flag.NewFlagSet("url", flag.ExitOnError)
 	fs.Usage = usage
 	registerGlobals(fs, &g)
-	fs.StringVar(&provider, "provider", "", "source provider: github (default), gitlab, sysinternals or agilebits")
+	fs.StringVar(&provider, "provider", "", "source provider: github (default), gitlab, sysinternals, agilebits or herdr")
 	fs.StringVar(&provider, "p", "", "shorthand for --provider")
 	repos := parseInterspersed(fs, args)
 	cfg, _, _ := setup(&g)
@@ -344,7 +354,7 @@ func runShow(args []string) int {
 	fs := flag.NewFlagSet("show", flag.ExitOnError)
 	fs.Usage = usage
 	registerGlobals(fs, &g)
-	fs.StringVar(&provider, "provider", "", "source provider: github (default), gitlab, sysinternals or agilebits")
+	fs.StringVar(&provider, "provider", "", "source provider: github (default), gitlab, sysinternals, agilebits or herdr")
 	fs.StringVar(&provider, "p", "", "shorthand for --provider")
 	repos := parseInterspersed(fs, args)
 	cfg, pkgList, _ := setup(&g)
@@ -401,22 +411,23 @@ func handleInstall(repos []string, binaryName, binDir, match string, all bool, f
 		}
 
 		opts := install.Options{
-			Repo:       spec.repo,
-			Provider:   spec.provider,
-			Host:       spec.host,
-			BinDir:     effectiveBinDir,
-			BinaryName: binaryName,
-			Match:      match,
-			All:        all,
-			DryRun:     g.dryRun,
-			Verbose:    g.verbose,
-			Debug:      g.debug,
-			DebugHTTP:  g.debugHTTP,
-			UserAgent:  cfg.UserAgent,
-			Progress:   progressOut(cfg, g),
-			Zipdown:    zd,
-			MinAge:     effectiveMinAge(cfg, g, pkgList.Get(spec.repo)),
-			PreferZip:  effectivePreferZip(cfg, pkgList.Get(spec.repo)),
+			Repo:           spec.repo,
+			Provider:       spec.provider,
+			Host:           spec.host,
+			BinDir:         effectiveBinDir,
+			BinaryName:     binaryName,
+			Match:          match,
+			All:            all,
+			ExcludeFromAll: effectiveExclude(cfg, pkgList.Get(spec.repo)),
+			DryRun:         g.dryRun,
+			Verbose:        g.verbose,
+			Debug:          g.debug,
+			DebugHTTP:      g.debugHTTP,
+			UserAgent:      cfg.UserAgent,
+			Progress:       progressOut(cfg, g),
+			Zipdown:        zd,
+			MinAge:         effectiveMinAge(cfg, g, pkgList.Get(spec.repo)),
+			PreferZip:      effectivePreferZip(cfg, pkgList.Get(spec.repo)),
 		}
 		if u != nil {
 			opts.Feedback = u
@@ -548,22 +559,23 @@ func handleUpdate(repos []string, cfg *config.Config, pkgList *packages.List, zd
 		}
 
 		opts := install.Options{
-			Repo:       entry.Repo,
-			Provider:   entry.Provider,
-			Host:       entry.Host,
-			BinDir:     effectiveBinDir,
-			BinaryName: entry.BinaryName,
-			Match:      entry.Match,
-			All:        entry.All,
-			Verbose:    g.verbose,
-			Debug:      g.debug,
-			DebugHTTP:  g.debugHTTP,
-			UserAgent:  cfg.UserAgent,
-			Progress:   progressOut(cfg, g),
-			Zipdown:    zd,
-			MinAge:     lookup.MinAge,
-			PreferZip:  lookup.PreferZip,
-			Current:    lookup.Current,
+			Repo:           entry.Repo,
+			Provider:       entry.Provider,
+			Host:           entry.Host,
+			BinDir:         effectiveBinDir,
+			BinaryName:     entry.BinaryName,
+			Match:          entry.Match,
+			All:            entry.All,
+			ExcludeFromAll: effectiveExclude(cfg, &entry),
+			Verbose:        g.verbose,
+			Debug:          g.debug,
+			DebugHTTP:      g.debugHTTP,
+			UserAgent:      cfg.UserAgent,
+			Progress:       progressOut(cfg, g),
+			Zipdown:        zd,
+			MinAge:         lookup.MinAge,
+			PreferZip:      lookup.PreferZip,
+			Current:        lookup.Current,
 		}
 		if u != nil {
 			opts.Feedback = u
@@ -774,6 +786,8 @@ func handleShow(repos []string, flagProvider string, pkgList *packages.List, cfg
 			release, err = sysinternals.LatestRelease(spec.repo, cfg.UserAgent, g.debugHTTP)
 		case agilebits.Provider:
 			release, err = agilebits.LatestRelease(spec.repo, cfg.UserAgent, g.debugHTTP)
+		case herdr.Provider:
+			release, err = herdr.LatestRelease(spec.repo, cfg.UserAgent, g.debugHTTP)
 		default:
 			release, err = github.LatestRelease(spec.repo, cfg.UserAgent, g.debugHTTP)
 		}
@@ -918,7 +932,7 @@ Usage: wpkget [flags] <command> [args]
 
 Commands:
   install <repo> [...]         install latest release (GitHub by default)
-           [--provider/-p <p>] source provider: github (default), gitlab, sysinternals or agilebits
+           [--provider/-p <p>] source provider: github (default), gitlab, sysinternals, agilebits or herdr
            [--name <binary>]   rename the installed binary (single repo only)
            [--match <pattern>] glob pattern to select the release asset
                                (e.g. --match "*windows-amd64*.zip")
@@ -938,9 +952,9 @@ Commands:
   check                        show latest available version for each tracked package
   remove  <user/repo> [...]    remove packages from tracking (binary not deleted)
   url     <user/repo> [...]    print the download URL without installing
-           [--provider/-p <p>] source provider: github (default), gitlab, sysinternals or agilebits
+           [--provider/-p <p>] source provider: github (default), gitlab, sysinternals, agilebits or herdr
   show    <user/repo> [...]    show package details and all available release assets
-           [--provider/-p <p>] source provider: github (default), gitlab, sysinternals or agilebits
+           [--provider/-p <p>] source provider: github (default), gitlab, sysinternals, agilebits or herdr
   config  <sub>                manage the config file
            open [packages]     open the file in $VISUAL/$EDITOR or the OS default app
            path [packages]     print the file path
@@ -956,6 +970,7 @@ Repo argument formats:
   owner/repo --provider gitlab        GitLab (explicit flag)
   sysinternals/<tool> -p sysinternals Sysinternals zip, e.g. sysinternals/process-explorer
   agilebits/<product> -p agilebits    AgileBits zip, e.g. agilebits/CLI2 (1Password CLI)
+  herdr/<app|core> -p herdr           Herdr manifest, e.g. herdr/app
 
 Flags (accepted anywhere on the command line):
   --config    <path>   config file (default: %APPDATA%\wpkget\config.yaml)

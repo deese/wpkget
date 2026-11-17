@@ -14,6 +14,7 @@ import (
 	"github.com/deese/wpkget/src/internal/asset"
 	"github.com/deese/wpkget/src/internal/github"
 	"github.com/deese/wpkget/src/internal/gitlab"
+	"github.com/deese/wpkget/src/internal/herdr"
 	"github.com/deese/wpkget/src/internal/sysinternals"
 )
 
@@ -32,6 +33,8 @@ func releaseByTag(provider, host, repo, tag, userAgent string, debugHTTP bool) (
 		return sysinternals.ReleaseByTag(repo, tag, userAgent, debugHTTP)
 	case agilebits.Provider:
 		return agilebits.ReleaseByTag(repo, tag, userAgent, debugHTTP)
+	case herdr.Provider:
+		return herdr.ReleaseByTag(repo, tag, userAgent, debugHTTP)
 	}
 	return github.ReleaseByTag(repo, tag, userAgent, debugHTTP)
 }
@@ -168,7 +171,7 @@ func Fetch(opts Options) (*Result, error) {
 		if err := os.MkdirAll(dest, 0o755); err != nil {
 			return nil, fmt.Errorf("install: create output dir: %w", err)
 		}
-		if err := extractAndCopyAll(archivePath, dest, tmpDir, opts.Debug, opts.DebugHTTP); err != nil {
+		if err := extractAndCopyAll(archivePath, dest, tmpDir, allOpts(opts, repoName)); err != nil {
 			return nil, err
 		}
 	default:

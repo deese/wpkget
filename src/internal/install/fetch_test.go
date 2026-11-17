@@ -256,3 +256,24 @@ func TestWithProviderDefaults(t *testing.T) {
 		t.Error("other providers must be left alone")
 	}
 }
+
+func TestWithProviderDefaultsHerdr(t *testing.T) {
+	app := withProviderDefaults(Options{Provider: "herdr", Repo: "herdr/app"})
+	if app.BinaryName != "herdr-app" || app.All {
+		t.Errorf("app: BinaryName = %q, All = %v; want herdr-app, false", app.BinaryName, app.All)
+	}
+	if got := withProviderDefaults(Options{Provider: "herdr", Repo: "herdr/app", BinaryName: "hd"}).BinaryName; got != "hd" {
+		t.Errorf("explicit --name must win, got %q", got)
+	}
+
+	// core needs conpty/ next to its executable: whole install, and --name
+	// renames the executable instead of narrowing the install.
+	core := withProviderDefaults(Options{Provider: "herdr", Repo: "herdr/core"})
+	if !core.All || core.BinaryName != "" {
+		t.Errorf("core: All = %v, BinaryName = %q; want true, empty", core.All, core.BinaryName)
+	}
+	core = withProviderDefaults(Options{Provider: "herdr", Repo: "herdr/core", BinaryName: "hc.exe"})
+	if !core.All || core.BinaryName != "hc.exe" {
+		t.Errorf("core --name: All = %v, BinaryName = %q; want true, hc.exe", core.All, core.BinaryName)
+	}
+}

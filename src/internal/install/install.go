@@ -22,6 +22,7 @@ import (
 	"github.com/deese/wpkget/src/internal/asset"
 	"github.com/deese/wpkget/src/internal/github"
 	"github.com/deese/wpkget/src/internal/gitlab"
+	"github.com/deese/wpkget/src/internal/herdr"
 	"github.com/deese/wpkget/src/internal/sysinternals"
 	"github.com/deese/wpkget/src/internal/zipdown"
 )
@@ -36,6 +37,8 @@ type Options struct {
 	Tag        string // Fetch: release tag to download; empty means the latest release
 	Match      string // optional: glob pattern to select the release asset (e.g. "*windows-amd64*.zip")
 	All        bool   // when true, copy all archive contents to BinDir instead of extracting a single .exe
+	// ExcludeFromAll lists patterns left out of an All install (see excluded).
+	ExcludeFromAll []string
 	NoExtract  bool   // Fetch: keep the downloaded file as is instead of extracting it
 	Force      bool   // Fetch: overwrite an existing destination
 	DryRun     bool
@@ -79,6 +82,8 @@ func latestRelease(opts Options) (*github.Release, error) {
 		return sysinternals.LatestRelease(opts.Repo, opts.UserAgent, opts.DebugHTTP)
 	case agilebits.Provider:
 		return agilebits.LatestRelease(opts.Repo, opts.UserAgent, opts.DebugHTTP)
+	case herdr.Provider:
+		return herdr.LatestRelease(opts.Repo, opts.UserAgent, opts.DebugHTTP)
 	case "gitlab":
 		if opts.MinAge > 0 {
 			return gitlab.ReleaseOlderThan(opts.Host, opts.Repo, opts.MinAge, opts.Current, opts.UserAgent, opts.DebugHTTP)
@@ -153,7 +158,7 @@ func Run(opts Options) (*Result, error) {
 
 	if opts.All {
 		// Copy all archive contents to BinDir.
-		if err := extractAndCopyAll(archivePath, opts.BinDir, tmpDir, opts.Debug, opts.DebugHTTP); err != nil {
+		if err := extractAndCopyAll(archivePath, opts.BinDir, tmpDir, allOpts(opts, repoName)); err != nil {
 			return nil, err
 		}
 		if opts.Verbose {
@@ -194,7 +199,35 @@ func withProviderDefaults(opts Options) Options {
 	if opts.Provider == agilebits.Provider && opts.BinaryName == "" {
 		opts.BinaryName = agilebitsBinaryName
 	}
+	if opts.Provider == herdr.Provider {
+		opts = herdrDefaults(opts)
+	}
 	return opts
+}
+
+// herdrDefaults: "herdr/core" needs the conpty/ files next to its executable,
+// so it is installed whole (--name then renames the executable, it does not
+// narrow the install). "herdr/app" is a single executable, installed as
+// "herdr-app" because the repo name alone ("app") would be a poor file name.
+func herdrDefaults(opts Options) Options {
+	if repoBaseName(opts.Repo) == "core" {
+		opts.All = true
+		return opts
+	}
+	if opts.BinaryName == "" {
+		opts.BinaryName = "herdr-" + repoBaseName(opts.Repo)
+	}
+	return opts
+}
+
+// allOpts builds the options of an All install. A BinaryName renames the main
+// binary of the archive instead of narrowing the install to it.
+func allOpts(opts Options, repoName string) allOptions {
+	a := allOptions{exclude: opts.ExcludeFromAll, repoName: repoName, debug: opts.Debug, debugHTTP: opts.DebugHTTP}
+	if opts.BinaryName != "" {
+		a.rename = resolveDestName(opts.BinaryName, repoName)
+	}
+	return a
 }
 
 // agilebitsBinaryName is the executable of the 1Password CLI (product CLI2).
@@ -626,14 +659,30 @@ func extractGz(src, dest string) error {
 	return nil
 }
 
-// extractAndCopyAll extracts archivePath and copies all its contents into destDir.
+// allOptions controls how extractAndCopyAll copies an archive.
+type allOptions struct {
+	exclude []string // exclude_from_all patterns; see excluded
+	// rename is the file name the main binary is installed as; empty keeps the
+	// name it has in the archive. The main binary is the one findBinary picks
+	// for repoName.
+	rename           string
+	repoName         string
+	debug, debugHTTP bool
+}
+
+// extractAndCopyAll extracts archivePath and copies all its contents into destDir,
+// leaving out what a.exclude matches and renaming the main binary to a.rename.
 // For single-file .gz and bare .exe assets only that file is copied.
-func extractAndCopyAll(archivePath, destDir, tmpDir string, debug, debugHTTP bool) error {
+func extractAndCopyAll(archivePath, destDir, tmpDir string, a allOptions) error {
+	if err := validateExclude(a.exclude); err != nil {
+		return err
+	}
+	debug := a.debug
 	lower := strings.ToLower(archivePath)
 
 	switch {
 	case strings.HasSuffix(lower, ".exe"):
-		dst := filepath.Join(destDir, filepath.Base(archivePath))
+		dst := filepath.Join(destDir, renamedOr(a.rename, filepath.Base(archivePath)))
 		dprint(debug, "debug: bare exe → %s", dst)
 		return copyFile(archivePath, dst)
 
@@ -643,37 +692,17 @@ func extractAndCopyAll(archivePath, destDir, tmpDir string, debug, debugHTTP boo
 			logZipEntries(archivePath)
 		}
 		extractDir := filepath.Join(tmpDir, "extracted")
-		if err := extractZip(archivePath, extractDir, debugHTTP); err != nil {
+		if err := extractZip(archivePath, extractDir, a.debugHTTP); err != nil {
 			return err
 		}
-		dprint(debug, "debug: extracted dir contents:")
-		if debug {
-			logDirContents(extractDir)
-		}
-		src := unwrapSingleDir(extractDir)
-		if src != extractDir {
-			dprint(debug, "debug: unwrapped single top-level dir → %s", filepath.Base(src))
-		} else {
-			dprint(debug, "debug: no single top-level dir to unwrap, copying from %s", extractDir)
-		}
-		return copyDirContents(src, destDir, debug)
+		return copyExtracted(extractDir, destDir, a)
 
 	case strings.HasSuffix(lower, ".tar.gz") || strings.HasSuffix(lower, ".tgz"):
 		extractDir := filepath.Join(tmpDir, "extracted")
 		if err := extractTarGz(archivePath, extractDir); err != nil {
 			return err
 		}
-		dprint(debug, "debug: extracted dir contents:")
-		if debug {
-			logDirContents(extractDir)
-		}
-		src := unwrapSingleDir(extractDir)
-		if src != extractDir {
-			dprint(debug, "debug: unwrapped single top-level dir → %s", filepath.Base(src))
-		} else {
-			dprint(debug, "debug: no single top-level dir to unwrap, copying from %s", extractDir)
-		}
-		return copyDirContents(src, destDir, debug)
+		return copyExtracted(extractDir, destDir, a)
 
 	case strings.HasSuffix(lower, ".gz"):
 		outPath := strings.TrimSuffix(archivePath, ".gz")
@@ -688,13 +717,55 @@ func extractAndCopyAll(archivePath, destDir, tmpDir string, debug, debugHTTP boo
 				return fmt.Errorf("install: chmod extracted binary: %w", err)
 			}
 		}
-		dst := filepath.Join(destDir, filepath.Base(outPath))
+		dst := filepath.Join(destDir, renamedOr(a.rename, filepath.Base(outPath)))
 		dprint(debug, "debug: gz → %s", dst)
 		return copyFile(outPath, dst)
 
 	default:
 		return fmt.Errorf("install: unrecognised archive format: %s", filepath.Base(archivePath))
 	}
+}
+
+// renamedOr returns rename when set, otherwise name.
+func renamedOr(rename, name string) string {
+	if rename != "" {
+		return rename
+	}
+	return name
+}
+
+// copyExtracted copies the extracted archive in extractDir into destDir, after
+// unwrapping a single top-level directory.
+func copyExtracted(extractDir, destDir string, a allOptions) error {
+	dprint(a.debug, "debug: extracted dir contents:")
+	if a.debug {
+		logDirContents(extractDir)
+	}
+	src := unwrapSingleDir(extractDir)
+	if src != extractDir {
+		dprint(a.debug, "debug: unwrapped single top-level dir → %s", filepath.Base(src))
+	} else {
+		dprint(a.debug, "debug: no single top-level dir to unwrap, copying from %s", extractDir)
+	}
+
+	// With a rename the main binary is installed under another name. It must
+	// exist and must not be excluded, or the install would silently lack it.
+	var mainRel, mainName string
+	if a.rename != "" {
+		found, err := findBinary(src, a.repoName)
+		if err != nil {
+			return fmt.Errorf("install: cannot apply --name %q: %w", a.rename, err)
+		}
+		rel, err := filepath.Rel(src, found)
+		if err != nil {
+			return fmt.Errorf("install: locate main binary: %w", err)
+		}
+		if excluded(rel, a.exclude) {
+			return fmt.Errorf("install: exclude_from_all would skip the main binary %s; narrow the patterns", filepath.ToSlash(rel))
+		}
+		mainRel, mainName = rel, a.rename
+	}
+	return copyDirContents(src, destDir, a.debug, a.exclude, mainRel, mainName)
 }
 
 func logZipEntries(archivePath string) {
@@ -739,7 +810,9 @@ func unwrapSingleDir(dir string) string {
 }
 
 // copyDirContents recursively copies all files and subdirectories from src into dst.
-func copyDirContents(src, dst string, debug bool) error {
+// Entries matching exclude are skipped (a matching directory with its subtree).
+// The file at mainRel, when set, is written next to its place as mainName.
+func copyDirContents(src, dst string, debug bool, exclude []string, mainRel, mainName string) error {
 	return filepath.Walk(src, func(p string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -748,7 +821,17 @@ func copyDirContents(src, dst string, debug bool) error {
 		if err != nil {
 			return err
 		}
+		if rel != "." && excluded(rel, exclude) {
+			dprint(debug, "debug: exclude %s", filepath.ToSlash(rel))
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
 		target := filepath.Join(dst, rel)
+		if mainName != "" && rel == mainRel {
+			target = filepath.Join(filepath.Dir(target), mainName)
+		}
 		if info.IsDir() {
 			return os.MkdirAll(target, 0o755)
 		}

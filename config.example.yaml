@@ -31,3 +31,11 @@ zipdown_token: ""
 # When a release has both a .zip and another format (e.g. a bare .exe), use the .zip.
 # Can be overridden per package in packages.yaml (prefer_zip: true|false).
 # prefer_zip: true
+
+# Files and directories left out when a package is installed with --all (also
+# `get --all`). Case-insensitive globs; a pattern without "/" matches the name at any
+# depth, one with "/" matches the path from the archive root (e.g. conpty/x64), and a
+# matching directory is skipped with everything inside it. The values below are the
+# default; an empty list ([]) excludes nothing. A package replaces the list with its
+# own exclude_from_all in packages.yaml.
+# exclude_from_all: ["LICENSE*", "README*", "COPYING*", "NOTICE*", "THIRD-PARTY-NOTICES*"]

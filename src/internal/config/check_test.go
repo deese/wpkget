@@ -84,3 +84,19 @@ func TestLoadProgress(t *testing.T) {
 		t.Fatal("invalid progress value must be rejected")
 	}
 }
+
+func TestLoadExcludeFromAll(t *testing.T) {
+	cfg, err := Load(writeTemp(t, ""))
+	if err != nil || len(cfg.ExcludeFromAll) != len(DefaultExcludeFromAll) {
+		t.Fatalf("default exclude_from_all = %v, err %v", cfg.ExcludeFromAll, err)
+	}
+	cfg, err = Load(writeTemp(t, "exclude_from_all: [\"*.md\"]\n"))
+	if err != nil || len(cfg.ExcludeFromAll) != 1 || cfg.ExcludeFromAll[0] != "*.md" {
+		t.Fatalf("custom exclude_from_all = %v, err %v", cfg.ExcludeFromAll, err)
+	}
+	// An explicit empty list disables the defaults; it is not the same as absent.
+	cfg, err = Load(writeTemp(t, "exclude_from_all: []\n"))
+	if err != nil || cfg.ExcludeFromAll == nil || len(cfg.ExcludeFromAll) != 0 {
+		t.Fatalf("empty exclude_from_all = %#v, err %v", cfg.ExcludeFromAll, err)
+	}
+}

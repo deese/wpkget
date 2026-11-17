@@ -41,6 +41,12 @@ type Config struct {
 	// overridden per package and per run with --min-age.
 	MinReleaseAge string `yaml:"min_release_age"`
 
+	// ExcludeFromAll lists the file and directory patterns left out when a
+	// package is installed with --all (case-insensitive globs; a match on a
+	// directory skips its whole subtree). Absent means DefaultExcludeFromAll;
+	// an explicit empty list excludes nothing. Can be overridden per package.
+	ExcludeFromAll []string `yaml:"exclude_from_all"`
+
 	// GitLabHosts lists the self-hosted GitLab instances wpkget may talk to,
 	// keyed by host (and port, if any), e.g. "git.example.com".
 	GitLabHosts map[string]GitLabHost `yaml:"gitlab_hosts"`
@@ -180,6 +186,9 @@ func Load(path string) (*Config, error) {
 		}
 		cfg.Progress = overlay.Progress
 	}
+	if overlay.ExcludeFromAll != nil { // an explicit empty list disables the defaults
+		cfg.ExcludeFromAll = overlay.ExcludeFromAll
+	}
 	cfg.GitLabHosts = overlay.GitLabHosts
 	cfg.GitHub = overlay.GitHub
 
@@ -276,12 +285,18 @@ func resolvePath(flag string) (path string, isDefault bool) {
 
 func defaults() *Config {
 	return &Config{
-		BinDir:    defaultBinDir(),
-		UserAgent: "wpkget",
-		PassCmd:   defaultPassCmd(),
-		Progress:  progress.Auto,
+		BinDir:         defaultBinDir(),
+		UserAgent:      "wpkget",
+		PassCmd:        defaultPassCmd(),
+		Progress:       progress.Auto,
+		ExcludeFromAll: append([]string(nil), DefaultExcludeFromAll...),
 	}
 }
+
+// DefaultExcludeFromAll is the exclude_from_all list used when the config does
+// not set one: license, readme and notice files that --all would otherwise
+// scatter in the bin dir.
+var DefaultExcludeFromAll = []string{"LICENSE*", "README*", "COPYING*", "NOTICE*", "THIRD-PARTY-NOTICES*"}
 
 // defaultPassCmd returns the pass-compatible binary for the platform.
 func defaultPassCmd() string {
