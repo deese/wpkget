@@ -85,6 +85,21 @@ wpkget install <user/repo> [...]
          [--match <pattern>]  glob to select the release asset
          [--all]              copy all archive contents to bin-dir
          [--bin-dir <path>]   destination directory for this package (saved per-package)
+         [-r, --file <list>]  also install the packages listed in a file
+```
+
+A list file has one package per line, with the same options as the command line (`--name`, `--match`, `--all`, `-p`). The repo comes first; blank lines and `#` comments are ignored; quote values containing spaces. `--provider` on the command line is the default for lines without `-p`; `--name`, `--match` and `--all` on the command line apply only to repos given on the command line.
+
+```
+# tools.txt
+junegunn/fzf
+BurntSushi/ripgrep --match "*windows-msvc*.zip"
+neovim/neovim --name nvim
+sysinternals/autoruns -p sysinternals
+```
+
+```
+wpkget install -r tools.txt
 ```
 
 Example:
@@ -341,7 +356,7 @@ wpkget check
 wpkget list [-v]
 ```
 
-Output shows each tracked package and its currently installed version.
+Output shows each tracked package with its provider (`github` when none is recorded) and its currently installed version.
 Pass `-v` to also show the resolved download URL.
 
 ### Manage the config file

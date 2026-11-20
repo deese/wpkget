@@ -266,6 +266,7 @@ func runInstall(args []string) int {
 		match      string
 		all        bool
 		provider   string
+		listFile   string
 	)
 	fs := flag.NewFlagSet("install", flag.ExitOnError)
 	fs.Usage = usage
@@ -275,10 +276,24 @@ func runInstall(args []string) int {
 	fs.BoolVar(&all, "all", false, "copy all archive contents to bin-dir")
 	fs.StringVar(&provider, "provider", "", "source provider: github (default), gitlab, sysinternals, agilebits or herdr")
 	fs.StringVar(&provider, "p", "", "shorthand for --provider")
+	fs.StringVar(&listFile, "file", "", "install the packages listed in this file (one per line)")
+	fs.StringVar(&listFile, "r", "", "shorthand for --file")
 
 	repos := parseInterspersed(fs, args)
+	var items []installItem
+	for _, arg := range repos {
+		items = append(items, installItem{arg: arg, provider: provider, binaryName: binaryName, match: match, all: all})
+	}
+	if listFile != "" {
+		fromFile, err := loadInstallList(listFile, provider)
+		if err != nil {
+			log.Printf("install: read %s: %v", listFile, err)
+			return exitGeneral
+		}
+		items = append(items, fromFile...)
+	}
 	cfg, pkgList, zd := setup(&g)
-	return handleInstall(repos, binaryName, g.binDir, match, all, provider, cfg, pkgList, zd, &g)
+	return handleInstall(items, binaryName, g.binDir, cfg, pkgList, zd, &g)
 }
 
 // runUpdate parses global flags and delegates to handleUpdate.
@@ -362,12 +377,13 @@ func runShow(args []string) int {
 }
 
 // handleInstall downloads and installs the latest release for each given repo.
-func handleInstall(repos []string, binaryName, binDir, match string, all bool, flagProvider string, cfg *config.Config, pkgList *packages.List, zd *zipdown.Client, g *globals) int {
-	if len(repos) == 0 {
+// binaryName is the --name flag; it is only valid when a single package is given.
+func handleInstall(items []installItem, binaryName, binDir string, cfg *config.Config, pkgList *packages.List, zd *zipdown.Client, g *globals) int {
+	if len(items) == 0 {
 		log.Print("install: missing <user/repo> argument")
 		return exitGeneral
 	}
-	if binaryName != "" && len(repos) > 1 {
+	if binaryName != "" && len(items) > 1 {
 		log.Print("install: --name can only be used with a single repo")
 		return exitGeneral
 	}
@@ -378,8 +394,8 @@ func handleInstall(repos []string, binaryName, binDir, match string, all bool, f
 	}
 
 	var names []string
-	for _, arg := range repos {
-		if spec, err := parseRepoArg(arg, flagProvider); err == nil {
+	for _, it := range items {
+		if spec, err := parseRepoArg(it.arg, it.provider); err == nil {
 			names = append(names, spec.repo)
 		}
 	}
@@ -399,8 +415,9 @@ func handleInstall(repos []string, binaryName, binDir, match string, all bool, f
 		log.Printf("install %s: %v", repo, err)
 	}
 
-	for _, rawArg := range repos {
-		spec, err := parseRepoArg(rawArg, flagProvider)
+	for _, it := range items {
+		rawArg, binaryName, match, all := it.arg, it.binaryName, it.match, it.all
+		spec, err := parseRepoArg(rawArg, it.provider)
 		if err != nil {
 			fail(rawArg, err, exitGeneral)
 			continue
@@ -631,25 +648,29 @@ func handleList(showURL bool, pkgList *packages.List, cfg *config.Config, g *glo
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	if showURL {
-		fmt.Fprintln(w, "REPO\tVERSION\tBINARY NAME\tBIN DIR\tURL")
+		fmt.Fprintln(w, "REPO\tPROVIDER\tVERSION\tBINARY NAME\tBIN DIR\tURL")
 	} else {
-		fmt.Fprintln(w, "REPO\tVERSION\tBINARY NAME\tBIN DIR")
+		fmt.Fprintln(w, "REPO\tPROVIDER\tVERSION\tBINARY NAME\tBIN DIR")
 	}
 
 	code := exitOK
 	for _, e := range pkgList.Packages {
+		provider := e.Provider
+		if provider == "" {
+			provider = "github" // empty provider means the default
+		}
 		if !showURL {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", e.Repo, e.Version, e.BinaryName, e.BinDir)
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", e.Repo, provider, e.Version, e.BinaryName, e.BinDir)
 			continue
 		}
 		_, url, err := install.ResolveURL(trackedLookup(cfg, g, &e))
 		if err != nil {
 			log.Printf("list %s: resolve url: %v", e.Repo, err)
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", e.Repo, e.Version, e.BinaryName, e.BinDir, "(error)")
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", e.Repo, provider, e.Version, e.BinaryName, e.BinDir, "(error)")
 			code = mapError(err)
 			continue
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", e.Repo, e.Version, e.BinaryName, e.BinDir, url)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", e.Repo, provider, e.Version, e.BinaryName, e.BinDir, url)
 	}
 	w.Flush()
 	return code
@@ -938,6 +959,8 @@ Commands:
                                (e.g. --match "*windows-amd64*.zip")
            [--all]             copy all archive contents (files + folders) to bin-dir
            [--bin-dir <path>]  destination directory for this package (saved per-package)
+           [-r/--file <list>]  also install the packages in a file (one per line, same
+                               options as above; blank lines and # comments are ignored)
   get     <repo> [...]         download a release without installing or tracking it
            [--tag/-t <tag>]    release tag (default: the latest release)
            [--out/-o <dir>]    output directory (default: current directory)

@@ -188,13 +188,13 @@ func (u *UI) Row(r Result) {
 		u.totalDur += r.Dur
 		from := pad("", verW) + " " + pad("", utf8.RuneCountInString(u.ic.arrow)) + " "
 		if oldV != "" {
-			from = u.red(pad(oldV, verW)) + " " + u.dim(u.ic.arrow) + " "
+			from = u.dim(pad(oldV, verW)) + " " + u.dim(u.ic.arrow) + " "
 		}
 		tail := u.dim(fmt.Sprintf("%10s  %6s", progress.FormatBytes(r.Size), progress.FormatDuration(r.Dur)))
 		if r.DryRun {
 			tail = u.dim("(dry-run)")
 		}
-		fmt.Fprintf(u.w, " %s %s %s%s  %s\n", u.yellow(u.ic.upd), u.bold(pad(r.Repo, nameW)), from, u.bgreen(pad(newV, verW)), tail)
+		fmt.Fprintf(u.w, " %s %s %s%s  %s\n", u.bgreen(u.ic.upd), u.bold(pad(r.Repo, nameW)), from, u.bgreen(pad(newV, verW)), tail)
 	case Downloaded:
 		tail := u.dim(fmt.Sprintf("%10s  %6s", progress.FormatBytes(r.Size), progress.FormatDuration(r.Dur)))
 		if r.DryRun {
@@ -219,7 +219,7 @@ func (u *UI) Note(text string) {
 // Summary prints the totals line. Call it once after the last Row.
 func (u *UI) Summary() {
 	fmt.Fprintf(u.w, "\n %s\n ", u.dim(strings.Repeat(u.ic.rule, ruleWidth)))
-	fmt.Fprintf(u.w, "%s  %s", u.yellow(u.bold(fmt.Sprintf("%s %d updated", u.ic.upd, u.updated))),
+	fmt.Fprintf(u.w, "%s  %s", u.bgreen(fmt.Sprintf("%s %d updated", u.ic.upd, u.updated)),
 		u.green(fmt.Sprintf("%s %d up to date", u.ic.ok, u.upToDate)))
 	if u.pinned > 0 {
 		fmt.Fprintf(u.w, "  %s", u.dim(fmt.Sprintf("%s %d pinned", u.ic.pin, u.pinned)))
